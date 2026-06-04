@@ -154,3 +154,39 @@ async def get_report(workspace_id: str, current_user: dict = Depends(get_current
         "ai_disclaimer": "This AI-generated analysis is intended for legal research assistance and strategic support only. It should not be treated as definitive legal advice.",
         "report_ready": True
     }
+
+@router.get("/reports/all")
+async def get_all_reports(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    user_email = current_user["email"]
+
+    # 1. Fetch workspaces for this user
+    workspaces_collection = get_collection("workspaces")
+    user_workspaces = await workspaces_collection.find({"created_by": user_email}).to_list(length=1000)
+    workspace_ids = [w["workspace_id"] for w in user_workspaces]
+    
+    workspace_map = {w["workspace_id"]: w for w in user_workspaces}
+
+    # 2. Fetch completed final reports
+    agent3_collection = get_collection("agent3_final_reports")
+    reports_cursor = agent3_collection.find({"workspace_id": {"$in": workspace_ids}})
+    reports_docs = await reports_cursor.to_list(length=1000)
+
+    reports_list = []
+    for r in reports_docs:
+        ws_id = r["workspace_id"]
+        ws = workspace_map.get(ws_id, {})
+        reports_list.append({
+            "id": ws_id,
+            "title": "Legal Intelligence Audit Report",
+            "generatedDate": r.get("generated_at").strftime("%Y-%m-%d") if r.get("generated_at") else datetime.utcnow().strftime("%Y-%m-%d"),
+            "caseName": ws.get("case_title", "Unnamed Case"),
+            "confidenceScore": 95,
+            "fileSize": "1.2 MB",
+            "category": "Evidentiary Review"
+        })
+
+    return {
+        "success": True,
+        "data": reports_list
+    }

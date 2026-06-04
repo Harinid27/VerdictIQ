@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
+import { SmoothSelect } from './SmoothSelect';
 import {
   CheckSquare,
   Plus,
@@ -108,47 +109,43 @@ export const TasksPage: React.FC<TasksPageProps> = ({
           {/* Case Filter */}
           <div className="w-full sm:w-auto flex items-center gap-2">
             <span className="text-[10px] text-brand-textMuted/60 uppercase font-semibold">Case:</span>
-            <select
+            <SmoothSelect
               value={caseFilter}
-              onChange={(e) => setCaseFilter(e.target.value)}
-              className="bg-[#161f30] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-brand-blue/50 max-w-[200px]"
-            >
-              <option value="All">All Cases</option>
-              {casesList.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              onChange={setCaseFilter}
+              options={[{ value: 'All', label: 'All Cases' }, ...casesList.map((c) => ({ value: c.id, label: c.name }))]}
+              className="w-48"
+            />
           </div>
 
           {/* Priority Filter */}
           <div className="w-full sm:w-auto flex items-center gap-2">
             <span className="text-[10px] text-brand-textMuted/60 uppercase font-semibold">Priority:</span>
-            <select
+            <SmoothSelect
               value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
-              className="bg-[#161f30] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-brand-blue/50"
-            >
-              <option value="All">All Priority</option>
-              <option value="Low">Low</option>
-              <option value="Medium">Medium</option>
-              <option value="High">High</option>
-            </select>
+              onChange={setPriorityFilter}
+              options={[
+                { value: 'All', label: 'All Priority' },
+                { value: 'Low', label: 'Low' },
+                { value: 'Medium', label: 'Medium' },
+                { value: 'High', label: 'High' },
+              ]}
+              className="w-32"
+            />
           </div>
 
           {/* Status Filter */}
           <div className="w-full sm:w-auto flex items-center gap-2">
             <span className="text-[10px] text-brand-textMuted/60 uppercase font-semibold">Status:</span>
-            <select
+            <SmoothSelect
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-[#161f30] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-brand-blue/50"
-            >
-              <option value="All">All Items</option>
-              <option value="Pending">Pending</option>
-              <option value="Completed">Completed</option>
-            </select>
+              onChange={setStatusFilter}
+              options={[
+                { value: 'All', label: 'All Items' },
+                { value: 'Pending', label: 'Pending' },
+                { value: 'Completed', label: 'Completed' },
+              ]}
+              className="w-32"
+            />
           </div>
         </div>
 

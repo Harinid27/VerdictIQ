@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Plus, Calendar, AlertTriangle, Landmark } from 'lucide-react';
 import { CreateWorkspaceWizard } from './CreateWorkspaceWizard';
+import { SmoothSelect } from './SmoothSelect';
 
 interface CaseModalProps {
   isOpen: boolean;
@@ -174,19 +175,13 @@ export const CaseModal: React.FC<CaseModalProps> = ({
                   <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">
                     Select Connected Case <span className="text-brand-blue">*</span>
                   </label>
-                  <select
-                    required
+                  <SmoothSelect
                     value={hearingCaseId}
-                    onChange={(e) => setHearingCaseId(e.target.value)}
-                    className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-brand-blue/60 transition-all duration-300"
-                  >
-                    <option value="" disabled>-- Select a Workspace --</option>
-                    {casesList.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setHearingCaseId}
+                    options={casesList.map((c) => ({ value: c.id, label: c.name }))}
+                    placeholder="-- Select a Workspace --"
+                    className="w-full"
+                  />
                 </div>
 
                 <div>
@@ -260,19 +255,13 @@ export const CaseModal: React.FC<CaseModalProps> = ({
                   <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">
                     Connect to Case <span className="text-brand-blue">*</span>
                   </label>
-                  <select
-                    required
+                  <SmoothSelect
                     value={taskCaseId}
-                    onChange={(e) => setTaskCaseId(e.target.value)}
-                    className="w-full bg-[#161f30] border border-white/10 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:border-brand-blue/60 transition-all duration-300"
-                  >
-                    <option value="" disabled>-- Select a Workspace --</option>
-                    {casesList.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setTaskCaseId}
+                    options={casesList.map((c) => ({ value: c.id, label: c.name }))}
+                    placeholder="-- Select a Workspace --"
+                    className="w-full"
+                  />
                 </div>
 
                 <div>

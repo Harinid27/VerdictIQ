@@ -13,8 +13,11 @@ import {
   File,
   Trash2,
   ArrowLeft,
-  Landmark
+  Landmark,
+  Plus,
+  X
 } from 'lucide-react';
+import { SmoothSelect } from './SmoothSelect';
 
 interface WorkspaceDetailPageProps {
   workspaceId: string;
@@ -62,6 +65,14 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
   // File Upload states
   const [uploadingFile, setUploadingFile] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+
+  // Manual Note states
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteContent, setNoteContent] = useState('');
+  const [noteType, setNoteType] = useState('Correspondence');
+  const [noteImportance, setNoteImportance] = useState('Important');
+  const [addingNote, setAddingNote] = useState(false);
 
   // Fetch all case workspace details
   const fetchWorkspaceData = async () => {
@@ -248,13 +259,65 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
   // PDF Export downloader
   const handleDownloadPDF = () => {
     const token = localStorage.getItem('verdictiq_token');
-    window.open(`http://localhost:8000/api/export/pdf/${workspaceId}?token=${token}`, '_blank');
+    const url = `http://localhost:8000/api/export/pdf/${workspaceId}?token=${token}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `verdictiq_report_${workspaceId}.pdf`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // DOCX Export downloader
   const handleDownloadDOCX = () => {
     const token = localStorage.getItem('verdictiq_token');
-    window.open(`http://localhost:8000/api/export/docx/${workspaceId}?token=${token}`, '_blank');
+    const url = `http://localhost:8000/api/export/docx/${workspaceId}?token=${token}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `verdictiq_report_${workspaceId}.docx`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Manual Note creation
+  const handleAddNoteSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = localStorage.getItem('verdictiq_token');
+    if (!token || !noteTitle.trim() || !noteContent.trim()) return;
+
+    setAddingNote(true);
+    const formData = new FormData();
+    formData.append('workspace_id', workspaceId);
+    formData.append('title', noteTitle);
+    formData.append('text_content', noteContent);
+    formData.append('evidence_type', noteType);
+    formData.append('description', 'Manual case note entered by counsel.');
+    formData.append('importance_level', noteImportance);
+
+    fetch('http://localhost:8000/api/workspace/upload-text-evidence', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    })
+      .then(res => res.json())
+      .then(data => {
+        setAddingNote(false);
+        if (data.success) {
+          setIsNoteModalOpen(false);
+          setNoteTitle('');
+          setNoteContent('');
+          handleRunPipeline();
+        } else {
+          alert("Note creation failed: " + data.message);
+        }
+      })
+      .catch(err => {
+        setAddingNote(false);
+        console.error("Note creation error:", err);
+      });
   };
 
   // Upload Evidence File inside Workspace
@@ -1037,13 +1100,22 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="text-left border-l-2 border-brand-blue pl-3 py-1">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-                  Case Evidence Repository
-                </h3>
-                <p className="text-xs text-brand-textMuted mt-0.5">
-                  Upload new evidence files to this case workspace. Supports PDF, DOCX, Images, and Text.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left border-l-2 border-brand-blue pl-3 py-1">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Case Evidence Repository
+                  </h3>
+                  <p className="text-xs text-brand-textMuted mt-0.5">
+                    Upload new evidence files to this case workspace. Supports PDF, DOCX, Images, and Text.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsNoteModalOpen(true)}
+                  className="px-3.5 py-2 rounded-xl text-[10px] font-bold tracking-wider text-white border border-brand-purple/20 hover:border-brand-purple bg-brand-purple/10 hover:bg-brand-purple/20 transition-all duration-300 flex items-center gap-1.5 cursor-pointer uppercase shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Factual Note</span>
+                </button>
               </div>
 
               {/* Drag and Drop Zone */}
@@ -1128,6 +1200,128 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
 
         </AnimatePresence>
       </div>
+
+      {/* Manual Note Modal */}
+      <AnimatePresence>
+        {isNoteModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsNoteModalOpen(false)}
+              className="absolute inset-0 bg-[#070A12]/80 backdrop-blur-md"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+              className="relative w-full max-w-[550px] rounded-2xl bg-brand-dark/95 border border-white/10 p-6 md:p-8 shadow-2xl overflow-hidden z-10"
+            >
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-brand-purple/50 to-brand-blue/50 opacity-80" />
+              
+              <button
+                onClick={() => setIsNoteModalOpen(false)}
+                className="absolute top-4 right-4 text-brand-textMuted hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 rounded-xl bg-gradient-to-br from-brand-purple/20 to-brand-blue/20 border border-brand-purple/30 text-brand-purple">
+                  <Brain className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold font-display text-white">Add Factual Case Note</h2>
+                  <p className="text-xs text-brand-textMuted mt-0.5">Write down custom facts or statements to inject into the AI analysis.</p>
+                </div>
+              </div>
+
+              <form onSubmit={handleAddNoteSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">Note Title *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Deposition statement regarding contract timeline"
+                    value={noteTitle}
+                    onChange={(e) => setNoteTitle(e.target.value)}
+                    className="w-full bg-[#161f30] border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-brand-blue/60 transition-all duration-300"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">Evidence Type</label>
+                  <SmoothSelect
+                    value={noteType}
+                    onChange={setNoteType}
+                    options={[
+                      { value: 'Correspondence', label: 'Correspondence / Communication' },
+                      { value: 'Contract', label: 'Contract / Agreement' },
+                      { value: 'Deposition', label: 'Deposition / Statement' },
+                      { value: 'Statute', label: 'Statute / Regulation' },
+                      { value: 'Other', label: 'Other Document Type' },
+                    ]}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">Importance Level</label>
+                  <div className="flex gap-2">
+                    {['Low', 'Important', 'Critical'].map((lvl) => (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setNoteImportance(lvl)}
+                        className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all duration-300 cursor-pointer ${
+                          noteImportance === lvl
+                            ? 'bg-brand-purple/20 border-brand-purple text-white shadow-[0_0_10px_rgba(123,97,255,0.15)]'
+                            : 'bg-[#161f30] border-white/5 text-brand-textMuted hover:border-white/15'
+                        }`}
+                      >
+                        {lvl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">Note Content *</label>
+                  <textarea
+                    required
+                    rows={4}
+                    placeholder="Enter manual details, facts, or testimony here..."
+                    value={noteContent}
+                    onChange={(e) => setNoteContent(e.target.value)}
+                    className="w-full bg-[#161f30] border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-brand-blue/60 transition-all duration-300 placeholder-white/20 resize-none text-left"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-white/5 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setIsNoteModalOpen(false)}
+                    className="flex-1 h-11 rounded-xl text-xs font-semibold border border-white/10 hover:border-white/20 text-brand-textMuted hover:text-white bg-transparent transition-all duration-300 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={addingNote || !noteTitle.trim() || !noteContent.trim()}
+                    className="flex-1 h-11 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-brand-blue to-brand-purple shadow-button-glow hover:translate-y-[-1px] active:translate-y-[0] transition-all duration-300 flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    {addingNote ? <Loader className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    <span>{addingNote ? 'Creating...' : 'Add Note'}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

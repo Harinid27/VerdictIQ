@@ -170,6 +170,81 @@ async def upload_evidence(
             "message": f"Upload failed: database write failed ({e})"
         }
 
+@router.post("/upload-text-evidence")
+async def upload_text_evidence(
+    workspace_id: str = Form(...),
+    title: str = Form(...),
+    text_content: str = Form(...),
+    evidence_type: str = Form(...),
+    description: str = Form(...),
+    importance_level: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = str(current_user["_id"])
+    user_email = current_user["email"]
+
+    # 1. Prepare simulated file representation
+    filename = f"{title.replace(' ', '_')}.txt"
+    file_bytes = text_content.encode("utf-8")
+
+    # 2. Upload to Cloudinary
+    try:
+        upload_res = upload_file_to_cloudinary(file_bytes, filename)
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Cloudinary upload failed: {e}"
+        }
+
+    # 3. Save in evidence_files collection
+    evidence_file_doc = {
+        "workspace_id": workspace_id,
+        "file_url": upload_res["secure_url"],
+        "file_name": filename,
+        "evidence_type": evidence_type,
+        "description": description,
+        "related_claim": "",
+        "importance_level": importance_level,
+        "uploaded_at": datetime.utcnow()
+    }
+
+    try:
+        evidence_files_collection = get_collection("evidence_files")
+        result = await evidence_files_collection.insert_one(evidence_file_doc)
+        file_id = str(result.inserted_id)
+        evidence_file_doc["_id"] = file_id
+
+        # 4. Dual write to evidence collection (legacy compatibility)
+        evidence_doc = {
+            "workspace_id": workspace_id,
+            "file_name": filename,
+            "file_url": upload_res["secure_url"],
+            "public_id": upload_res["public_id"],
+            "evidence_type": evidence_type,
+            "description": description,
+            "importance_level": importance_level,
+            "extracted_text": text_content,
+            "uploaded_by": user_email,
+            "user_id": user_id,
+            "uploaded_at": datetime.utcnow()
+        }
+        evidence_doc["_id"] = result.inserted_id
+        await get_collection("evidence").insert_one(evidence_doc)
+
+        return {
+            "success": True,
+            "message": "Manual text evidence uploaded successfully",
+            "file_id": file_id,
+            "file_url": upload_res["secure_url"],
+            "data": serialize_mongo_doc(evidence_file_doc)
+        }
+    except Exception as e:
+        delete_file_from_cloudinary(upload_res["public_id"])
+        return {
+            "success": False,
+            "message": f"Upload failed: database write failed ({e})"
+        }
+
 @router.get("/{workspace_id}/structured-context")
 async def get_structured_context(workspace_id: str, current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])

@@ -94,7 +94,7 @@ function App() {
   const [hearings, setHearings] = useState<Hearing[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
-  const [reports] = useState<Report[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
 
   // Handle Collapsed Sidebar on screen resize
   useEffect(() => {
@@ -167,6 +167,16 @@ function App() {
         }
       })
       .catch((err) => console.error("Error loading hearings from API:", err));
+
+    // Fetch Reports
+    fetch('http://localhost:8000/api/agent3/reports/all', { headers })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setReports(data.data);
+        }
+      })
+      .catch((err) => console.error("Error loading reports from API:", err));
   };
 
   // Verify token session on initial app mount
@@ -210,6 +220,22 @@ function App() {
       fetchDatabaseData(token);
     }
   }, [activeView]);
+
+  // Fetch / refresh reports dynamically when switching to Reports tab
+  useEffect(() => {
+    const token = localStorage.getItem('verdictiq_token');
+    if (activeTab === 'Reports' && token) {
+      const headers = { 'Authorization': `Bearer ${token}` };
+      fetch('http://localhost:8000/api/agent3/reports/all', { headers })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.data) {
+            setReports(data.data);
+          }
+        })
+        .catch((err) => console.error("Error loading reports from API:", err));
+    }
+  }, [activeTab]);
 
   // Auth Handling callbacks
   const handleLoginSuccess = (token: string, userData: any) => {

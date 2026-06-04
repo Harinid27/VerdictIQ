@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
+import { SmoothSelect } from './SmoothSelect';
 import {
   Grid,
   List,
@@ -79,7 +80,7 @@ export const CasesPage: React.FC<CasesPageProps> = ({
 
   return (
     <div className="space-y-6 select-none">
-      {/* Header and Add Workspace Trigger */}
+      {/* Header and Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold uppercase tracking-wider text-white font-display flex items-center gap-2">
@@ -90,17 +91,6 @@ export const CasesPage: React.FC<CasesPageProps> = ({
             Manage your AI legal operating systems, case files, and cross-reference repositories.
           </p>
         </div>
-
-        <motion.button
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.98 }}
-          onClick={onCreateClick}
-          className="relative h-10 px-5 rounded-xl text-xs font-semibold tracking-wider text-white overflow-hidden shadow-button-glow transition-all duration-300 flex items-center justify-center gap-1.5 font-display uppercase shrink-0"
-        >
-          <div className="absolute inset-0 bg-gradient-to-r from-brand-blue to-brand-purple" />
-          <Plus className="w-4 h-4 relative z-10" />
-          <span className="relative z-10">Initialize Workspace</span>
-        </motion.button>
       </div>
 
       {/* Filter and Control Bar */}
@@ -121,48 +111,39 @@ export const CasesPage: React.FC<CasesPageProps> = ({
           {/* Status Filter */}
           <div className="w-full sm:w-auto flex items-center gap-2">
             <span className="text-[10px] text-brand-textMuted/60 uppercase font-semibold">Status:</span>
-            <select
+            <SmoothSelect
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-[#161f30] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-brand-blue/50"
-            >
-              {statuses.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+              onChange={setStatusFilter}
+              options={statuses.map((s) => ({ value: s, label: s }))}
+              className="w-36"
+            />
           </div>
 
           {/* Risk Level Filter */}
           <div className="w-full sm:w-auto flex items-center gap-2">
             <span className="text-[10px] text-brand-textMuted/60 uppercase font-semibold">Risk:</span>
-            <select
+            <SmoothSelect
               value={riskFilter}
-              onChange={(e) => setRiskFilter(e.target.value)}
-              className="bg-[#161f30] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-brand-blue/50"
-            >
-              <option value="All">All Risk</option>
-              <option value="Low">Low Risk</option>
-              <option value="Medium">Medium Risk</option>
-              <option value="High">High Risk</option>
-            </select>
+              onChange={setRiskFilter}
+              options={[
+                { value: 'All', label: 'All Risk' },
+                { value: 'Low', label: 'Low Risk' },
+                { value: 'Medium', label: 'Medium Risk' },
+                { value: 'High', label: 'High Risk' },
+              ]}
+              className="w-32"
+            />
           </div>
 
           {/* Case Type Filter */}
           <div className="w-full sm:w-auto flex items-center gap-2">
             <span className="text-[10px] text-brand-textMuted/60 uppercase font-semibold">Type:</span>
-            <select
+            <SmoothSelect
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="bg-[#161f30] border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-brand-blue/50"
-            >
-              {uniqueTypes.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+              onChange={setTypeFilter}
+              options={uniqueTypes.map((t) => ({ value: t, label: t }))}
+              className="w-40"
+            />
           </div>
         </div>
 

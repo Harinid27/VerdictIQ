@@ -54,12 +54,69 @@ async def get_all_cases(user_id: str) -> List[dict]:
 
 async def delete_case_record(case_id: str, user_id: str) -> bool:
     cases_collection = get_collection("cases")
+    
+    # 1. Prepare ID filters (handling both ObjectId and string representations)
     try:
         oid = ObjectId(case_id)
+        case_filter = {"$or": [{"_id": oid, "user_id": user_id}, {"_id": case_id, "user_id": user_id}]}
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid case ID format")
-    result = await cases_collection.delete_one({"_id": oid, "user_id": user_id})
-    return result.deleted_count > 0
+        case_filter = {"_id": case_id, "user_id": user_id}
+        
+    # Delete from cases collection
+    result = await cases_collection.delete_one(case_filter)
+    if result.deleted_count == 0:
+        return False
+
+    # 2. Delete from workspaces
+    await get_collection("workspaces").delete_many({"workspace_id": case_id})
+
+    # 3. Fetch hearings to delete their calendar events
+    hearings_cursor = get_collection("hearings").find({"workspace_id": case_id, "user_id": user_id})
+    hearings = await hearings_cursor.to_list(length=1000)
+    hearing_ids = [str(h["_id"]) for h in hearings]
+    await get_collection("hearings").delete_many({"workspace_id": case_id, "user_id": user_id})
+
+    # 4. Fetch tasks to delete their calendar events
+    tasks_cursor = get_collection("tasks").find({"workspace_id": case_id, "user_id": user_id})
+    tasks = await tasks_cursor.to_list(length=1000)
+    task_ids = [str(t["_id"]) for t in tasks]
+    await get_collection("tasks").delete_many({"workspace_id": case_id, "user_id": user_id})
+
+    # 5. Delete all linked calendar events (matching workspace_id or linked to task/hearing)
+    await get_collection("calendar_events").delete_many({
+        "user_id": user_id,
+        "$or": [
+            {"workspace_id": case_id},
+            {"linked_id": {"$in": hearing_ids + task_ids}}
+        ]
+    })
+
+    # 6. Delete evidence files and clean up Cloudinary assets
+    evidence_cursor = get_collection("evidence").find({"workspace_id": case_id, "user_id": user_id})
+    evidence_docs = await evidence_cursor.to_list(length=1000)
+    for ev in evidence_docs:
+        public_id = ev.get("public_id")
+        if public_id:
+            try:
+                from app.utils.cloudinary_helper import delete_file_from_cloudinary
+                delete_file_from_cloudinary(public_id)
+            except Exception:
+                pass
+    
+    await get_collection("evidence").delete_many({"workspace_id": case_id, "user_id": user_id})
+    await get_collection("evidence_files").delete_many({"workspace_id": case_id})
+
+    # 7. Delete extraction and agent analysis documents
+    await get_collection("document_extractions").delete_many({"workspace_id": case_id})
+    await get_collection("structured_case_context").delete_many({"workspace_id": case_id})
+    await get_collection("agent1_analysis").delete_many({"workspace_id": case_id})
+    await get_collection("agent2_strategy").delete_many({"workspace_id": case_id})
+    await get_collection("agent3_final_reports").delete_many({"workspace_id": case_id})
+
+    # 8. Delete workspace chat history
+    await get_collection("workspace_chats").delete_many({"workspace_id": case_id})
+
+    return True
 
 # Hearings CRUD Services
 async def create_hearing_record(hearing_data: HearingCreate, user_id: str, user_email: str) -> dict:
@@ -379,8 +436,14 @@ async def get_dashboard_analytics_stats(user_id: str) -> dict:
         "riskLevel": "High"
     })
     
-    # 7. Mock reports generated
-    generated_reports = 3  # Based on initial mock reports count
+    # 7. Reports generated from workspaces belonging to this user
+    cases_cursor = cases_collection.find({"user_id": user_id})
+    cases_list = await cases_cursor.to_list(length=1000)
+    workspace_ids = [str(c["_id"]) for c in cases_list]
+    
+    generated_reports = await get_collection("agent3_final_reports").count_documents({
+        "workspace_id": {"$in": workspace_ids}
+    })
     
     return {
         "total_cases": total_cases,

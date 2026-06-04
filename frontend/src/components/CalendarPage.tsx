@@ -66,12 +66,14 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
   // Helper to extract hearings for a specific day in this month
   const getHearingsForDay = (day: number) => {
     return hearings.filter((h) => {
-      const hDate = new Date(h.date);
-      return (
-        hDate.getDate() === day &&
-        hDate.getMonth() === month &&
-        hDate.getFullYear() === year
-      );
+      if (!h.date) return false;
+      const datePart = h.date.split('T')[0];
+      const parts = datePart.split('-');
+      if (parts.length !== 3) return false;
+      const hYear = parseInt(parts[0], 10);
+      const hMonth = parseInt(parts[1], 10) - 1;
+      const hDay = parseInt(parts[2], 10);
+      return hYear === year && hMonth === month && hDay === day;
     });
   };
 
@@ -79,12 +81,12 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
   const getTasksForDay = (day: number) => {
     return tasks.filter((t) => {
       if (!t.dueDate) return false;
-      const tDate = new Date(t.dueDate);
-      return (
-        tDate.getDate() === day &&
-        tDate.getMonth() === month &&
-        tDate.getFullYear() === year
-      );
+      const parts = t.dueDate.split('-');
+      if (parts.length !== 3) return false;
+      const tYear = parseInt(parts[0], 10);
+      const tMonth = parseInt(parts[1], 10) - 1;
+      const tDay = parseInt(parts[2], 10);
+      return tYear === year && tMonth === month && tDay === day;
     });
   };
 
@@ -150,7 +152,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
               key={t.id}
               className={`text-[8px] truncate px-1 rounded font-bold uppercase tracking-wide border ${
                 t.completed
-                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400/70 line-through'
+                  ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60 line-through decoration-zinc-500/60'
                   : t.priority === 'High'
                   ? 'bg-red-500/10 border-red-500/20 text-red-400'
                   : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
@@ -308,17 +310,17 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
                   return (
                     <div
                       key={t.id}
-                      className="group p-3 rounded-xl border border-white/5 bg-brand-dark/20 flex flex-col gap-2"
+                      className={`group p-3 rounded-xl border border-white/5 bg-brand-dark/20 flex flex-col gap-2 transition-all duration-300 ${t.completed ? 'opacity-55 bg-white/[0.01]' : ''}`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className={`text-xs font-bold text-white group-hover:text-brand-blue transition-colors duration-200 flex items-center gap-1.5 ${t.completed ? 'line-through text-brand-textMuted/60' : ''}`}>
-                          <CheckSquare className="w-3.5 h-3.5 text-brand-purple shrink-0" />
+                        <span className={`text-xs font-bold text-white group-hover:text-brand-blue transition-colors duration-200 flex items-center gap-1.5 ${t.completed ? 'line-through text-zinc-500/60 decoration-zinc-500/60' : ''}`}>
+                          <CheckSquare className={`w-3.5 h-3.5 shrink-0 ${t.completed ? 'text-zinc-500/60' : 'text-brand-purple'}`} />
                           Task: {t.title}
                         </span>
                         <span
                           className={`text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
                             t.completed
-                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                              ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60'
                               : t.priority === 'High'
                               ? 'bg-red-500/10 border-red-500/20 text-red-400'
                               : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
