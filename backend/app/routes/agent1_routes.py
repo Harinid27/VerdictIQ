@@ -32,9 +32,13 @@ async def analyze_workspace_evidence(workspace_id: str, current_user: dict = Dep
             "message": "Structured context unavailable"
         }
 
+    # Fetch workspaces meta details to get lawyer_side
+    workspace_meta = await get_collection("workspaces").find_one({"workspace_id": workspace_id})
+    lawyer_side = workspace_meta.get("lawyer_side") if workspace_meta else None
+
     # 2. Call Gemini service to perform evidence audit and risk assessment
     try:
-        analysis_result = await analyze_case_evidence_and_risks(context_doc)
+        analysis_result = await analyze_case_evidence_and_risks(context_doc, lawyer_side=lawyer_side)
     except Exception as e:
         logger.error(f"Failed to perform Agent 1 analysis: {e}")
         raise HTTPException(

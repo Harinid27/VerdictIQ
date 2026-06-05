@@ -142,7 +142,11 @@ async def ask_workspace_agent(
         formatted_history.append(f"{role}: {h['text']}")
     history_str = "\n".join(formatted_history)
 
+    side_lower = (workspace.get("lawyer_side") or "").lower()
+    prefix = "You are assisting the DEFENSE lawyer." if ("defense" in side_lower or "defendant" in side_lower) else "You are assisting the PROSECUTION lawyer."
+
     prompt = f"""
+    {prefix}
     You are the VerdictIQ Multi-Agent Routing and Cognitive Coordinator.
     
     A lawyer is asking a question regarding an active legal case workspace.
@@ -155,10 +159,18 @@ async def ask_workspace_agent(
     2. Answer the question in character as that selected agent.
        - IMPORTANT: Start your response with the agent designation header exactly, e.g. '[Agent 1 - Case Analysis Agent]' or '[Agent 2 - Courtroom Strategy Agent]' or '[Agent 3 - Legal Intelligence & Report Agent]'.
        - Deliver an evidence-grounded, professional, and clinical legal answer based strictly on the provided case data.
-       - STRICT FACTUAL GROUNDING RULE: You must ONLY refer to documents, facts, dates, timeline events, and entities that are present in the provided Case Context Data or the Recent Chat History. Do NOT assume, extrapolate, or invent any files, contracts, verbal agreements, or names.
+       - STRICT FACTUAL GROUNDING RULE: You must ONLY refer to documents, facts, dates, timeline events, and entities that are present in the provided Case Context Data or the Recent Chat History. Do NOT assume, extrapolate, or invent any files, contracts, verbal agreements, names, or legal conclusions. If information is insufficient, state "Insufficient supporting evidence available."
        - If the user asks about a detail or document not present in the context, explicitly state: "This detail/document is not present in the workspace files."
-       - Keep your tone sharp, analytical, and highly structured (use lists or bullet points if appropriate).
-       - Never hallucinate facts, witnesses, or documents not found in the context.
+       - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Write like an intelligent legal assistant speaking to a lawyer.
+       - Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
+       - STRUCTURE YOUR RESPONSE: Avoid giant paragraphs and unreadable text walls. You must structure your findings/answers using these exact sections where applicable:
+         ### Summary
+         ### Strong Points
+         ### Weak Points
+         ### Missing Proof
+         ### Possible Opponent Attack
+         ### Recommended Action
+       - Keep responses concise, clear, and practical.
 
     Case Context Data:
     {json.dumps(context_data, cls=MongoJSONEncoder, indent=2)}
@@ -179,41 +191,77 @@ async def ask_workspace_agent(
         # Mock Routing & Answer based dynamically on actual context
         lower_q = question.lower()
         client = workspace.get("client_name") or "Client"
-        opponent = workspace.get("opposing_party") or "Opposing Party"
+        opponent = workspace.get("opposing_party") or "Opponent"
         case_type = workspace.get("case_type") or "General Dispute"
         
         strong_ev = context_data.get("evidence_audit", {}).get("strong_evidence", [])
         
         if any(w in lower_q for w in ["loophole", "weak", "evidence", "contradict", "missing", "risk"]):
             agent_name = "Agent 1 - Case Analysis Agent"
-            ev_summary = f", including files: {', '.join([item.get('file_name', 'Document') for item in strong_ev])}" if strong_ev else ""
-            reply_text = f"[Agent 1 - Case Analysis Agent] Based on the audited evidence in this workspace ({case_type} between {client} and {opponent}):\n\n"
-            if strong_ev:
-                reply_text += f"* **Evidence Status**: We have verified {len(strong_ev)} strong evidence document(s){ev_summary}.\n"
-            else:
-                reply_text += "* **Evidence Status**: No strong evidence files are currently verified in this workspace.\n"
-            
-            missing_ev = context_data.get("evidence_audit", {}).get("missing_evidence", [])
-            if missing_ev:
-                reply_text += f"* **Gaps & Missing Evidence**: Highlighted concerns include: {', '.join([m.get('description', '') for m in missing_ev])}.\n"
-            else:
-                reply_text += "* **Gaps & Missing Evidence**: Additional corroboration is required to substantiate all claims.\n"
-            reply_text += "* **Loopholes**: Review digital metadata and timeline verification rules."
+            ev_summary = f"including files: {', '.join([item.get('file_name', 'Document') for item in strong_ev])}" if strong_ev else "none"
+            missing_desc = ', '.join([m.get('description', '') for m in context_data.get("evidence_audit", {}).get("missing_evidence", [])]) or "Additional corroboration documents"
+            reply_text = f"""[Agent 1 - Case Analysis Agent]
+### Summary
+Audited case analysis for the {case_type} between {client} and {opponent}.
+
+### Strong Points
+Verified evidence: {ev_summary}.
+
+### Weak Points
+Gaps in documentation and electronic verification metadata.
+
+### Missing Proof
+Missing critical evidence: {missing_desc}.
+
+### Possible Opponent Attack
+Targeting the chain of custody or authenticity of electronic documents.
+
+### Recommended Action
+Obtain metadata validation reports and verify the timeline entries."""
             
         elif any(w in lower_q for w in ["argument", "opposing", "opponent", "attack", "rebut", "court", "trial"]):
             agent_name = "Agent 2 - Courtroom Strategy Agent"
             side = workspace.get("lawyer_side") or "counsel"
-            reply_text = f"[Agent 2 - Courtroom Strategy Agent] Simulating courtroom strategy for the {side} ({client}):\n\n"
-            reply_text += f"* **Primary Argument**: {opposing_party} is liable under the asserted claims based on the factual timeline.\n"
-            reply_text += f"* **Opposition Attack Vector**: Opponent will likely target the verifiability and gaps in the timeline details.\n"
-            reply_text += "* **Rebuttal strategy**: Rely strictly on the documented facts and timelines present in the workspace files."
+            reply_text = f"""[Agent 2 - Courtroom Strategy Agent]
+### Summary
+Simulating courtroom strategy for the {side} representing {client}.
+
+### Strong Points
+Assertion of liability under the claims backed by available timeline evidence.
+
+### Weak Points
+Vulnerabilities in proving strict compliance and oral notifications.
+
+### Missing Proof
+Written confirmation of notice and signed statements.
+
+### Possible Opponent Attack
+Opposing counsel will target procedural gaps and argue waiver or estoppel.
+
+### Recommended Action
+Prioritize arguments that rely on undisputed written timeline records and exclude verbal interactions."""
             
         else:
             agent_name = "Agent 3 - Legal Intelligence & Report Agent"
             strength = context_data.get("final_report", {}).get("case_strength") or "Moderate"
-            reply_text = f"[Agent 3 - Legal Intelligence & Report Agent] Reviewing synthesis report for case '{workspace.get('case_title')}':\n\n"
-            reply_text += f"* **Executive Summary**: Case strength is evaluated as {strength}. The dispute centers around a {case_type} between {client} and {opponent}.\n"
-            reply_text += "* **Legal References**: Counsel should reference general civil procedures and evidence codes governing contract disputes."
+            reply_text = f"""[Agent 3 - Legal Intelligence & Report Agent]
+### Summary
+Synthesized case intelligence report for case '{workspace.get('case_title')}'. Case strength is evaluated as {strength}.
+
+### Strong Points
+Documented contract timeline and primary transaction records.
+
+### Weak Points
+Uncorroborated timeline assertions and potential waiver risks.
+
+### Missing Proof
+Third-party verification of digital metadata.
+
+### Possible Opponent Attack
+Burden-of-proof challenging arguments targeting our timeline details.
+
+### Recommended Action
+Reference general civil procedures and evidence codes governing burden of proof to address evidentiary gaps."""
     else:
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")

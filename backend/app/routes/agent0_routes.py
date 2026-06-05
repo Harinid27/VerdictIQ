@@ -133,7 +133,8 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
             analysis = await analyze_document_text(
                 text=extracted_text, 
                 filename=file_name, 
-                doc_description=description
+                doc_description=description,
+                lawyer_side=workspace.get("lawyer_side")
             )
         except Exception as ex:
             logger.error(f"Error analyzing document {file_name}: {ex}")
