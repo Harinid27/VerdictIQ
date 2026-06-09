@@ -6,6 +6,7 @@ from datetime import datetime
 from bson import ObjectId
 import google.generativeai as genai
 from dotenv import load_dotenv
+from langchain_core.prompts import PromptTemplate
 
 # Ensure environment variables are loaded immediately
 load_dotenv()
@@ -40,6 +41,117 @@ def get_lawyer_side_prefix(lawyer_side: str) -> str:
     else:
         return "You are assisting the PROSECUTION lawyer.\n"
 
+DOCUMENT_ANALYSIS_PROMPT = PromptTemplate(
+    input_variables=["lawyer_side_prefix", "filename", "doc_description", "text"],
+    template="""{lawyer_side_prefix}
+You are an AI-powered legal intake assistant.
+Analyze the following text extracted from document '{filename}' (Description: {doc_description}).
+Extract:
+1. Key entities (people, organizations, locations, dates, financial amounts, legal references/statutes).
+2. All important dates mentioned in the text.
+3. A clear, concise, professional AI legal summary of the document.
+
+STRICT FACTUAL GROUNDING RULES:
+- You must ONLY extract information directly present in the provided Document Text.
+- Do NOT assume, extrapolate, or invent any entities, dates, or details.
+- If a category of entities has no entries in the document text, return an empty list for that category. Do NOT invent placeholders.
+
+ADDITIONAL INSTRUCTIONS:
+- Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon.
+- Think practically and logically. If any information is insufficient, state "Insufficient supporting evidence available."
+
+Return the result strictly as a valid JSON object matching the following structure:
+{{
+  "extracted_entities": {{
+    "people": ["string"],
+    "organizations": ["string"],
+    "locations": ["string"],
+    "dates": ["string"],
+    "financial_amounts": ["string"],
+    "legal_references": ["string"]
+  }},
+  "extracted_dates": ["string"],
+  "ai_summary": "string"
+}}
+
+Document Text:
+{text}"""
+)
+
+CASE_CONTEXT_PROMPT = PromptTemplate(
+    input_variables=["lawyer_side_prefix", "case_title", "case_type", "lawyer_side", "client_name", "opposing_party", "case_description", "objectives", "expected_outcome", "concerns", "docs_joined"],
+    template="""{lawyer_side_prefix}
+You are the core Legal Intake Intelligence engine for VerdictIQ.
+Below is the workspace metadata and the AI analyses of the uploaded evidence files.
+Synthesize all this information to create a structured AI-ready case context.
+
+Workspace Metadata:
+- Case Title: {case_title}
+- Case Type: {case_type}
+- Lawyer Side: {lawyer_side}
+- Client: {client_name}
+- Opposing Party: {opposing_party}
+- Case Description: {case_description}
+- Objectives: {objectives}
+- Expected Outcome: {expected_outcome}
+- Concerns: {concerns}
+
+Document Extraction Summaries:
+{docs_joined}
+
+STRICT FACTUAL GROUNDING RULES:
+- Your output MUST be strictly grounded in the provided Workspace Metadata and Document Extraction Summaries.
+- Do NOT fabricate or introduce any external facts, parties, dates, transactions, or documents.
+- Do NOT duplicate any timeline events, claims, or entities. Ensure every item is unique.
+- If no evidence files are uploaded or if document extractions are empty, you must state that there is no documentary evidence, and base the context strictly on the workspace metadata.
+- If there are no claims, timeline events, or entities, leave those lists empty. Do NOT invent generic items.
+
+ADDITIONAL INSTRUCTIONS:
+- Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon.
+- Think practically and logically. All suggestions, timelines, and relationships must align with the selected lawyer side: support the prosecution perspective if Plaintiff/Prosecution, and support the defense perspective if Defendant/Defense.
+- Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
+- If information is insufficient, clearly state: "Insufficient supporting evidence available."
+
+You must output:
+1. A synthesized, high-quality, and comprehensive case summary narrative.
+2. A list of key legal claims or defenses.
+3. A clear chronological timeline of events (dates, incidents, transaction references, legal events).
+4. Key entities identified across the case, mapping them to their type and legal role.
+5. Evidence relationships mapping specific evidence files (use file names or file IDs if available) to specific claims, including a brief description of how they support the claim.
+6. A clear list of legal objectives.
+7. A clear list of legal concerns or vulnerabilities.
+
+Return the result strictly as a valid JSON object matching the following structure:
+{{
+  "case_summary": "string",
+  "claims": ["string"],
+  "timeline": [
+    {{
+      "date": "string",
+      "incident": "string",
+      "transaction_reference": "string",
+      "legal_event": "string"
+    }}
+  ],
+  "key_entities": [
+    {{
+      "name": "string",
+      "type": "string",
+      "role": "string"
+    }}
+  ],
+  "evidence_relationships": [
+    {{
+      "evidence_id": "string",
+      "claim_id": "string",
+      "relationship_description": "string"
+    }}
+  ],
+  "objectives": ["string"],
+  "concerns": ["string"]
+}}"""
+)
+
 async def analyze_document_text(text: str, filename: str, doc_description: str, lawyer_side: str = None) -> Dict[str, Any]:
     """
     Calls Gemini to analyze a single document text and extract entities, dates, and a summary.
@@ -63,41 +175,12 @@ async def analyze_document_text(text: str, filename: str, doc_description: str, 
         return generate_mock_document_analysis(text, filename, doc_description)
 
     prefix = get_lawyer_side_prefix(lawyer_side)
-    prompt = f"""
-    {prefix}
-    You are an AI-powered legal intake assistant.
-    Analyze the following text extracted from document '{filename}' (Description: {doc_description}).
-    Extract:
-    1. Key entities (people, organizations, locations, dates, financial amounts, legal references/statutes).
-    2. All important dates mentioned in the text.
-    3. A clear, concise, professional AI legal summary of the document.
-
-    STRICT FACTUAL GROUNDING RULES:
-    - You must ONLY extract information directly present in the provided Document Text.
-    - Do NOT assume, extrapolate, or invent any entities, dates, or details.
-    - If a category of entities has no entries in the document text, return an empty list for that category. Do NOT invent placeholders.
-
-    ADDITIONAL INSTRUCTIONS:
-    - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon.
-    - Think practically and logically. If any information is insufficient, state "Insufficient supporting evidence available."
-
-    Return the result strictly as a valid JSON object matching the following structure:
-    {{
-      "extracted_entities": {{
-        "people": ["string"],
-        "organizations": ["string"],
-        "locations": ["string"],
-        "dates": ["string"],
-        "financial_amounts": ["string"],
-        "legal_references": ["string"]
-      }},
-      "extracted_dates": ["string"],
-      "ai_summary": "string"
-    }}
-    
-    Document Text:
-    {text}
-    """
+    prompt = DOCUMENT_ANALYSIS_PROMPT.format(
+        lawyer_side_prefix=prefix,
+        filename=filename,
+        doc_description=doc_description,
+        text=text
+    )
 
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -135,78 +218,19 @@ async def generate_structured_case_context(workspace_meta: Dict[str, Any], docum
 
     lawyer_side = workspace_meta.get("lawyer_side")
     prefix = get_lawyer_side_prefix(lawyer_side)
-    prompt = f"""
-    {prefix}
-    You are the core Legal Intake Intelligence engine for VerdictIQ.
-    Below is the workspace metadata and the AI analyses of the uploaded evidence files.
-    Synthesize all this information to create a structured AI-ready case context.
-
-    Workspace Metadata:
-    - Case Title: {workspace_meta.get('case_title')}
-    - Case Type: {workspace_meta.get('case_type')}
-    - Lawyer Side: {workspace_meta.get('lawyer_side')}
-    - Client: {workspace_meta.get('client_name')}
-    - Opposing Party: {workspace_meta.get('opposing_party')}
-    - Case Description: {workspace_meta.get('case_description')}
-    - Objectives: {workspace_meta.get('objectives')}
-    - Expected Outcome: {workspace_meta.get('expected_outcome')}
-    - Concerns: {workspace_meta.get('concerns')}
-
-    Document Extraction Summaries:
-    {docs_joined}
-
-    STRICT FACTUAL GROUNDING RULES:
-    - Your output MUST be strictly grounded in the provided Workspace Metadata and Document Extraction Summaries.
-    - Do NOT fabricate or introduce any external facts, parties, dates, transactions, or documents.
-    - Do NOT duplicate any timeline events, claims, or entities. Ensure every item is unique.
-    - If no evidence files are uploaded or if document extractions are empty, you must state that there is no documentary evidence, and base the context strictly on the workspace metadata.
-    - If there are no claims, timeline events, or entities, leave those lists empty. Do NOT invent generic items.
-
-    ADDITIONAL INSTRUCTIONS:
-    - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon.
-    - Think practically and logically. All suggestions, timelines, and relationships must align with the selected lawyer side: support the prosecution perspective if Plaintiff/Prosecution, and support the defense perspective if Defendant/Defense.
-    - Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
-    - If information is insufficient, clearly state: "Insufficient supporting evidence available."
-
-    You must output:
-    1. A synthesized, high-quality, and comprehensive case summary narrative.
-    2. A list of key legal claims or defenses.
-    3. A clear chronological timeline of events (dates, incidents, transaction references, legal events).
-    4. Key entities identified across the case, mapping them to their type and legal role.
-    5. Evidence relationships mapping specific evidence files (use file names or file IDs if available) to specific claims, including a brief description of how they support the claim.
-    6. A clear list of legal objectives.
-    7. A clear list of legal concerns or vulnerabilities.
-
-    Return the result strictly as a valid JSON object matching the following structure:
-    {{
-      "case_summary": "string",
-      "claims": ["string"],
-      "timeline": [
-        {{
-          "date": "string",
-          "incident": "string",
-          "transaction_reference": "string",
-          "legal_event": "string"
-        }}
-      ],
-      "key_entities": [
-        {{
-          "name": "string",
-          "type": "string",
-          "role": "string"
-        }}
-      ],
-      "evidence_relationships": [
-        {{
-          "evidence_id": "string",
-          "claim_id": "string",
-          "relationship_description": "string"
-        }}
-      ],
-      "objectives": ["string"],
-      "concerns": ["string"]
-    }}
-    """
+    prompt = CASE_CONTEXT_PROMPT.format(
+        lawyer_side_prefix=prefix,
+        case_title=workspace_meta.get('case_title') or '',
+        case_type=workspace_meta.get('case_type') or '',
+        lawyer_side=workspace_meta.get('lawyer_side') or '',
+        client_name=workspace_meta.get('client_name') or '',
+        opposing_party=workspace_meta.get('opposing_party') or '',
+        case_description=workspace_meta.get('case_description') or '',
+        objectives=workspace_meta.get('objectives') or '',
+        expected_outcome=workspace_meta.get('expected_outcome') or '',
+        concerns=workspace_meta.get('concerns') or '',
+        docs_joined=docs_joined
+    )
 
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -219,6 +243,7 @@ async def generate_structured_case_context(workspace_meta: Dict[str, Any], docum
     except Exception as e:
         logger.error(f"Gemini aggregate case structuring error: {e}. Falling back to dynamic mock data.")
         return generate_mock_case_context(workspace_meta, document_analyses)
+
 
 
 def generate_mock_document_analysis(text: str, filename: str, doc_description: str) -> Dict[str, Any]:
@@ -379,6 +404,131 @@ def generate_mock_case_context(workspace_meta: Dict[str, Any], document_analyses
     }
 
 
+EVIDENCE_RISK_PROMPT = PromptTemplate(
+    input_variables=["lawyer_side_prefix", "structured_context"],
+    template="""{lawyer_side_prefix}
+You are Agent 1, the "Legal Evidence Intelligence & Risk Analysis Engine" for VerdictIQ.
+Your task is to critically audit the structured legal case context produced by Agent 0.
+
+Input Structured Case Context:
+{structured_context}
+
+Perform the following analyses:
+1. EVIDENCE STRENGTH ANALYSIS:
+   Audit and classify the evidence mentioned in the timeline, context, and evidence relationships.
+   Classify evidence items into:
+   - strong_evidence: directly supports claims, verifiable, specific, well documented.
+   - moderate_evidence: partially supports or lacks absolute verification.
+   - weak_evidence: vague, indirect, unsupported, unclear origin, insufficient relevance.
+   - unsupported_claims: claims or objectives made in the context that have no supporting evidence files or timeline records.
+   Ensure: If any evidence is completely insufficient for a claim, explicitly note "Insufficient supporting evidence available."
+
+2. MISSING EVIDENCE DETECTION:
+   Identify gaps in proof. What documentation, witness statements, transaction records, or timestamps are missing?
+
+3. LOOPHOLE DETECTION:
+   Detect vague claims, timeline inconsistencies, documentation weaknesses, or conflicting witness narrative points.
+
+4. CONTRADICTION ANALYSIS:
+   Find mismatch/contradiction between:
+   - claims and evidence
+   - evidence and timeline
+   - evidence and objectives
+   - timeline events that conflict with each other.
+
+5. RISK ANALYSIS:
+   Evaluate vulnerabilities, assumptions, and assign a risk_level ("Low Risk", "Medium Risk", "High Risk", "Critical Risk").
+
+6. CONFIDENCE SCORING:
+   For each claim listed in the claims, assign a confidence_score between 0 and 100 representing the strength/reliability of supporting evidence.
+
+7. EVIDENCE RELATIONSHIPS:
+   List mapping details connecting evidence_id/file_name to specific claim_id or claims.
+
+STRICT BEHAVIOR & GROUNDING RULES:
+- Never directly modify the input context; only analyze it.
+- All analysis, reasoning, suggestion of risks, and audit assessments must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
+- Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Explain findings clearly like a professional legal assistant speaking to a lawyer.
+- Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
+- Always explain reasoning. Do NOT just label evidence as weak or strong. Explain WHY in courtroom terms.
+- Stay strictly evidence-grounded. Do NOT invent witnesses, transactions, events, legal conclusions, or court outcomes.
+- If there is absolutely no evidence or it is completely insufficient, output: "Insufficient supporting evidence available." in the corresponding descriptive fields.
+- Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
+- Ensure there are no duplicate items in any list.
+
+Return the analysis strictly as a valid JSON object matching the following structure:
+{{
+  "strong_evidence": [
+    {{
+      "evidence_id": "string",
+      "file_name": "string",
+      "supporting_claim": "string",
+      "reasoning": "string"
+    }}
+  ],
+  "moderate_evidence": [
+    {{
+      "evidence_id": "string",
+      "file_name": "string",
+      "supporting_claim": "string",
+      "reasoning": "string"
+    }}
+  ],
+  "weak_evidence": [
+    {{
+      "evidence_id": "string",
+      "file_name": "string",
+      "reasoning": "string"
+    }}
+  ],
+  "unsupported_claims": [
+    {{
+      "claim": "string",
+      "reasoning": "string"
+    }}
+  ],
+  "missing_evidence": [
+    {{
+      "category": "string",
+      "description": "string",
+      "impact": "string"
+    }}
+  ],
+  "loopholes": [
+    {{
+      "title": "string",
+      "description": "string",
+      "severity": "string"
+    }}
+  ],
+  "contradictions": [
+    {{
+      "item_a": "string",
+      "item_b": "string",
+      "discrepancy": "string"
+    }}
+  ],
+  "risk_analysis": {{
+    "risk_level": "string",
+    "vulnerabilities": ["string"],
+    "assumptions": ["string"]
+  }},
+  "confidence_scores": [
+    {{
+      "claim": "string",
+      "confidence_score": 82
+    }}
+  ],
+  "evidence_relationships": [
+    {{
+      "evidence_id": "string",
+      "claim_id": "string",
+      "relationship_description": "string"
+    }}
+  ]
+}}"""
+)
+
 async def analyze_case_evidence_and_risks(structured_context: Dict[str, Any], lawyer_side: str = None) -> Dict[str, Any]:
     """
     Agent 1 Analysis using Gemini API.
@@ -392,129 +542,10 @@ async def analyze_case_evidence_and_risks(structured_context: Dict[str, Any], la
         lawyer_side = structured_context.get("lawyer_side")
     prefix = get_lawyer_side_prefix(lawyer_side)
 
-    prompt = f"""
-    {prefix}
-    You are Agent 1, the "Legal Evidence Intelligence & Risk Analysis Engine" for VerdictIQ.
-    Your task is to critically audit the structured legal case context produced by Agent 0.
-
-    Input Structured Case Context:
-    {json.dumps(structured_context, cls=MongoJSONEncoder, indent=2)}
-
-    Perform the following analyses:
-    1. EVIDENCE STRENGTH ANALYSIS:
-       Audit and classify the evidence mentioned in the timeline, context, and evidence relationships.
-       Classify evidence items into:
-       - strong_evidence: directly supports claims, verifiable, specific, well documented.
-       - moderate_evidence: partially supports or lacks absolute verification.
-       - weak_evidence: vague, indirect, unsupported, unclear origin, insufficient relevance.
-       - unsupported_claims: claims or objectives made in the context that have no supporting evidence files or timeline records.
-       Ensure: If any evidence is completely insufficient for a claim, explicitly note "Insufficient supporting evidence available."
-
-    2. MISSING EVIDENCE DETECTION:
-       Identify gaps in proof. What documentation, witness statements, transaction records, or timestamps are missing?
-
-    3. LOOPHOLE DETECTION:
-       Detect vague claims, timeline inconsistencies, documentation weaknesses, or conflicting witness narrative points.
-
-    4. CONTRADICTION ANALYSIS:
-       Find mismatch/contradiction between:
-       - claims and evidence
-       - evidence and timeline
-       - evidence and objectives
-       - timeline events that conflict with each other.
-
-    5. RISK ANALYSIS:
-       Evaluate vulnerabilities, assumptions, and assign a risk_level ("Low Risk", "Medium Risk", "High Risk", "Critical Risk").
-
-    6. CONFIDENCE SCORING:
-       For each claim listed in the claims, assign a confidence_score between 0 and 100 representing the strength/reliability of supporting evidence.
-
-    7. EVIDENCE RELATIONSHIPS:
-       List mapping details connecting evidence_id/file_name to specific claim_id or claims.
-
-    STRICT BEHAVIOR & GROUNDING RULES:
-    - Never directly modify the input context; only analyze it.
-    - All analysis, reasoning, suggestion of risks, and audit assessments must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
-    - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Explain findings clearly like a professional legal assistant speaking to a lawyer.
-    - Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
-    - Always explain reasoning. Do NOT just label evidence as weak or strong. Explain WHY in courtroom terms.
-    - Stay strictly evidence-grounded. Do NOT invent witnesses, transactions, events, legal conclusions, or court outcomes.
-    - If there is absolutely no evidence or it is completely insufficient, output: "Insufficient supporting evidence available." in the corresponding descriptive fields.
-    - Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
-    - Ensure there are no duplicate items in any list.
-
-    Return the analysis strictly as a valid JSON object matching the following structure:
-    {{
-      "strong_evidence": [
-        {{
-          "evidence_id": "string",
-          "file_name": "string",
-          "supporting_claim": "string",
-          "reasoning": "string"
-        }}
-      ],
-      "moderate_evidence": [
-        {{
-          "evidence_id": "string",
-          "file_name": "string",
-          "supporting_claim": "string",
-          "reasoning": "string"
-        }}
-      ],
-      "weak_evidence": [
-        {{
-          "evidence_id": "string",
-          "file_name": "string",
-          "reasoning": "string"
-        }}
-      ],
-      "unsupported_claims": [
-        {{
-          "claim": "string",
-          "reasoning": "string"
-        }}
-      ],
-      "missing_evidence": [
-        {{
-          "category": "string",
-          "description": "string",
-          "impact": "string"
-        }}
-      ],
-      "loopholes": [
-        {{
-          "title": "string",
-          "description": "string",
-          "severity": "string"
-        }}
-      ],
-      "contradictions": [
-        {{
-          "item_a": "string",
-          "item_b": "string",
-          "discrepancy": "string"
-        }}
-      ],
-      "risk_analysis": {{
-        "risk_level": "string",
-        "vulnerabilities": ["string"],
-        "assumptions": ["string"]
-      }},
-      "confidence_scores": [
-        {{
-          "claim": "string",
-          "confidence_score": 82
-        }}
-      ],
-      "evidence_relationships": [
-        {{
-          "evidence_id": "string",
-          "claim_id": "string",
-          "relationship_description": "string"
-        }}
-      ]
-    }}
-    """
+    prompt = EVIDENCE_RISK_PROMPT.format(
+        lawyer_side_prefix=prefix,
+        structured_context=json.dumps(structured_context, cls=MongoJSONEncoder, indent=2)
+    )
 
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -527,6 +558,7 @@ async def analyze_case_evidence_and_risks(structured_context: Dict[str, Any], la
     except Exception as e:
         logger.error(f"Gemini Agent 1 analysis failure: {e}. Falling back to dynamic mock engine.")
         return generate_mock_agent1_analysis(structured_context, lawyer_side=lawyer_side)
+
 
 
 def generate_mock_agent1_analysis(structured_context: Dict[str, Any], lawyer_side: str = None) -> Dict[str, Any]:
@@ -644,6 +676,99 @@ def generate_mock_agent1_analysis(structured_context: Dict[str, Any], lawyer_sid
         "evidence_relationships": evidence_rel
     }
 
+COURTROOM_STRATEGY_PROMPT = PromptTemplate(
+    input_variables=["lawyer_side_prefix", "lawyer_side", "case_context", "agent1_analysis"],
+    template="""{lawyer_side_prefix}
+You are Agent 2, the "AI Courtroom Strategy & Adversarial Reasoning Engine" for VerdictIQ.
+Your objective is to simulate courtroom reasoning and generate tactical courtroom strategy intelligence.
+
+You represent the '{lawyer_side}' side of the case.
+Your strategy must remain strictly aligned with the '{lawyer_side}' position.
+
+If lawyer_side is Plaintiff/Prosecution:
+  - Support the prosecution perspective with persuasive, accusatory, and claim-supporting arguments.
+If lawyer_side is Defendant/Defense:
+  - Support the defense perspective with defensive, claim-challenging, and burden-of-proof challenging arguments.
+
+Input Case Context (from Agent 0):
+{case_context}
+
+Input Evidence Auditing (from Agent 1):
+{agent1_analysis}
+
+Perform the following adversarial simulations:
+1. LAWYER ARGUMENT GENERATION:
+   Generate persuasive, evidence-grounded arguments backing our objectives and claims.
+   Ensure all arguments directly link to evidence.
+2. OPPOSITION COUNTERARGUMENT SIMULATION:
+   Predict how opposing counsel will attack our timeline, credibility, witness narrative, or document validity.
+3. REBUTTAL STRATEGY GENERATION:
+   Generate mitigation reasoning and timeline/evidence clarifications to counter the predicted opposition attacks.
+4. COURTROOM RISKS:
+   Identify vulnerabilities (timeline gaps, lack of corroboration, witness credibility concerns).
+5. STRATEGIC RECOMMENDATIONS:
+   Actionable courtroom directions, argument presentation sequences, and claims to emphasize.
+6. ARGUMENT PRIORITIES:
+   Group our arguments into "strongest_arguments" (fully backed), "moderate_arguments", and "risky_arguments" (weak evidence/vulnerable).
+7. EVIDENCE UTILIZATION STRATEGY:
+   Recommend sequencing order and guidance for presenting evidence files.
+
+STRICT FACTUAL GROUNDING & BEHAVIOR RULES:
+- All arguments, counterarguments, rebuttals, risks, and recommendations must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
+- Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Explain findings clearly like a professional legal assistant speaking to a lawyer.
+- Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing. Explain WHY evidence is strong or weak.
+- Stay completely grounded in the provided facts and evidence. NEVER fabricate laws, statutes, witness testimonies, documents, dates, transactions, or court outcomes.
+- If information is insufficient, clearly state: "Insufficient supporting evidence available."
+- Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
+- Ensure there are no duplicate entries.
+
+Return the analysis strictly as a valid JSON object matching the following structure:
+{{
+  "lawyer_arguments": [
+    {{
+      "claim_id": "string",
+      "argument_title": "string",
+      "narrative": "string",
+      "evidence_support": ["string"]
+    }}
+  ],
+  "opponent_counterarguments": [
+    {{
+      "claim_id": "string",
+      "attack_vector": "string",
+      "explanation": "string",
+      "evidence_targeted": ["string"]
+    }}
+  ],
+  "rebuttal_strategies": [
+    {{
+      "counterargument_targeted": "string",
+      "rebuttal_narrative": "string",
+      "mitigation_steps": ["string"]
+    }}
+  ],
+  "courtroom_risks": [
+    {{
+      "title": "string",
+      "description": "string",
+      "severity": "string"
+    }}
+  ],
+  "strategic_recommendations": ["string"],
+  "argument_priorities": {{
+    "strongest_arguments": ["string"],
+    "moderate_arguments": ["string"],
+    "risky_arguments": ["string"]
+  }},
+  "evidence_utilization_strategy": [
+    {{
+      "evidence_id": "string",
+      "sequence_order": 1,
+      "presentation_guidance": "string"
+    }}
+  ]
+}}"""
+)
 
 async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -657,98 +782,12 @@ async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_ana
     lawyer_side = workspace_meta.get("lawyer_side", "Plaintiff")
     prefix = get_lawyer_side_prefix(lawyer_side)
 
-    prompt = f"""
-    {prefix}
-    You are Agent 2, the "AI Courtroom Strategy & Adversarial Reasoning Engine" for VerdictIQ.
-    Your objective is to simulate courtroom reasoning and generate tactical courtroom strategy intelligence.
-    
-    You represent the '{lawyer_side}' side of the case.
-    Your strategy must remain strictly aligned with the '{lawyer_side}' position.
-    
-    If lawyer_side is Plaintiff/Prosecution:
-      - Support the prosecution perspective with persuasive, accusatory, and claim-supporting arguments.
-    If lawyer_side is Defendant/Defense:
-      - Support the defense perspective with defensive, claim-challenging, and burden-of-proof challenging arguments.
-
-    Input Case Context (from Agent 0):
-    {json.dumps(workspace_meta, cls=MongoJSONEncoder, indent=2)}
-
-    Input Evidence Auditing (from Agent 1):
-    {json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2)}
-
-    Perform the following adversarial simulations:
-    1. LAWYER ARGUMENT GENERATION:
-       Generate persuasive, evidence-grounded arguments backing our objectives and claims.
-       Ensure all arguments directly link to evidence.
-    2. OPPOSITION COUNTERARGUMENT SIMULATION:
-       Predict how opposing counsel will attack our timeline, credibility, witness narrative, or document validity.
-    3. REBUTTAL STRATEGY GENERATION:
-       Generate mitigation reasoning and timeline/evidence clarifications to counter the predicted opposition attacks.
-    4. COURTROOM RISKS:
-       Identify vulnerabilities (timeline gaps, lack of corroboration, witness credibility concerns).
-    5. STRATEGIC RECOMMENDATIONS:
-       Actionable courtroom directions, argument presentation sequences, and claims to emphasize.
-    6. ARGUMENT PRIORITIES:
-       Group our arguments into "strongest_arguments" (fully backed), "moderate_arguments", and "risky_arguments" (weak evidence/vulnerable).
-    7. EVIDENCE UTILIZATION STRATEGY:
-       Recommend sequencing order and guidance for presenting evidence files.
-
-    STRICT FACTUAL GROUNDING & BEHAVIOR RULES:
-    - All arguments, counterarguments, rebuttals, risks, and recommendations must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
-    - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Explain findings clearly like a professional legal assistant speaking to a lawyer.
-    - Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing. Explain WHY evidence is strong or weak.
-    - Stay completely grounded in the provided facts and evidence. NEVER fabricate laws, statutes, witness testimonies, documents, dates, transactions, or court outcomes.
-    - If information is insufficient, clearly state: "Insufficient supporting evidence available."
-    - Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
-    - Ensure there are no duplicate entries.
-
-    Return the analysis strictly as a valid JSON object matching the following structure:
-    {{
-      "lawyer_arguments": [
-        {{
-          "claim_id": "string",
-          "argument_title": "string",
-          "narrative": "string",
-          "evidence_support": ["string"]
-        }}
-      ],
-      "opponent_counterarguments": [
-        {{
-          "claim_id": "string",
-          "attack_vector": "string",
-          "explanation": "string",
-          "evidence_targeted": ["string"]
-        }}
-      ],
-      "rebuttal_strategies": [
-        {{
-          "counterargument_targeted": "string",
-          "rebuttal_narrative": "string",
-          "mitigation_steps": ["string"]
-        }}
-      ],
-      "courtroom_risks": [
-        {{
-          "title": "string",
-          "description": "string",
-          "severity": "string"
-        }}
-      ],
-      "strategic_recommendations": ["string"],
-      "argument_priorities": {{
-        "strongest_arguments": ["string"],
-        "moderate_arguments": ["string"],
-        "risky_arguments": ["string"]
-      }},
-      "evidence_utilization_strategy": [
-        {{
-          "evidence_id": "string",
-          "sequence_order": 1,
-          "presentation_guidance": "string"
-        }}
-      ]
-    }}
-    """
+    prompt = COURTROOM_STRATEGY_PROMPT.format(
+        lawyer_side_prefix=prefix,
+        lawyer_side=lawyer_side,
+        case_context=json.dumps(workspace_meta, cls=MongoJSONEncoder, indent=2),
+        agent1_analysis=json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2)
+    )
 
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -761,6 +800,7 @@ async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_ana
     except Exception as e:
         logger.error(f"Gemini Agent 2 strategy failure: {e}. Falling back to dynamic mock engine.")
         return generate_mock_agent2_strategy(workspace_meta, agent1_analysis)
+
 
 
 def generate_mock_agent2_strategy(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -859,6 +899,112 @@ def generate_mock_agent2_strategy(workspace_meta: Dict[str, Any], agent1_analysi
     }
 
 
+FINAL_REPORT_PROMPT = PromptTemplate(
+    input_variables=["lawyer_side_prefix", "case_context", "agent1_analysis", "agent2_strategy"],
+    template="""{lawyer_side_prefix}
+You are Agent 3, the "AI Legal Intelligence Synthesis & Final Reporting Engine" for VerdictIQ.
+Your task is to synthesize all prior agent analyses to create a polished, professional legal intelligence report.
+
+Input Case Context (from Agent 0):
+{case_context}
+
+Input Evidence Analysis (from Agent 1):
+{agent1_analysis}
+
+Input Courtroom Strategy (from Agent 2):
+{agent2_strategy}
+
+Perform the following report synthesis tasks:
+1. EXECUTIVE CASE SUMMARY:
+   Synthesize a concise overview of the case, highlighting major legal concerns, strongest evidence, and critical vulnerabilities.
+2. CASE STRENGTH EVALUATION:
+   Assign an overall case strength rating: "Strong Case", "Moderate Case", "Weak Case", or "High Risk Case" based on evidence and contradictions.
+3. LEGAL REFERENCE IDENTIFICATION:
+   Identify contextually relevant acts, statutes, laws, and probable legal sections. Include descriptions of their relevance.
+   STRICT RULE: Suggest relevant sections contextually; DO NOT claim guaranteed legal applicability or provide definitive legal advice.
+4. STRATEGIC RECOMMENDATIONS:
+   List prioritized next-step recommendations and risk mitigation strategies.
+5. PROFESSIONAL REPORT GENERATION:
+   Compile the final consolidated report. To improve quality massively, you must avoid giant paragraphs and unreadable text walls.
+   Structure the report strictly using the following 6 sections exactly:
+   - Summary
+   - Strong Points
+   - Weak Points
+   - Missing Proof
+   - Possible Opponent Attack
+   - Recommended Action
+
+STRICT FACTUAL GROUNDING & BEHAVIOR RULES:
+- All report content, assessments, and recommendations must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
+- Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Write like an intelligent legal assistant speaking to a lawyer.
+- Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
+- Stay completely grounded in the provided facts. NEVER fabricate statutes, precedents, witness testimonies, transactions, dates, or evidence. Do NOT introduce any external facts or documents.
+- If information is insufficient, clearly state: "Insufficient supporting evidence available."
+- Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
+- Add this mandatory AI disclaimer text:
+  "This AI-generated analysis is intended for legal research assistance and strategic support only. It should not be treated as definitive legal advice."
+- Ensure there are no duplicate entries.
+
+Return the analysis strictly as a valid JSON object matching the following structure:
+{{
+  "executive_summary": "string",
+  "case_strength": "string",
+  "strongest_evidence": [
+    {{
+      "evidence_id": "string",
+      "file_name": "string",
+      "supporting_claim": "string",
+      "reasoning": "string"
+    }}
+  ],
+  "weak_evidence": [
+    {{
+      "evidence_id": "string",
+      "file_name": "string",
+      "reasoning": "string"
+    }}
+  ],
+  "missing_evidence": [
+    {{
+      "category": "string",
+      "description": "string",
+      "impact": "string"
+    }}
+  ],
+  "loopholes": [
+    {{
+      "title": "string",
+      "description": "string",
+      "severity": "string"
+    }}
+  ],
+  "legal_references": [
+    {{
+      "act_or_statute": "string",
+      "section": "string",
+      "relevance": "string"
+    }}
+  ],
+  "strategic_recommendations": ["string"],
+  "courtroom_risks": [
+    {{
+      "title": "string",
+      "description": "string",
+      "severity": "string"
+    }}
+  ],
+  "final_case_assessment": "string",
+  "generated_report": {{
+    "sections": [
+      {{
+        "title": "string",
+        "content": "string"
+      }}
+    ]
+  }}
+}}"""
+)
+
 async def generate_final_legal_report(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any], agent2_strategy: Dict[str, Any]) -> Dict[str, Any]:
     """
     Agent 3 Final Report Synthesis using Gemini.
@@ -871,110 +1017,12 @@ async def generate_final_legal_report(workspace_meta: Dict[str, Any], agent1_ana
     lawyer_side = workspace_meta.get("lawyer_side", "Plaintiff")
     prefix = get_lawyer_side_prefix(lawyer_side)
 
-    prompt = f"""
-    {prefix}
-    You are Agent 3, the "AI Legal Intelligence Synthesis & Final Reporting Engine" for VerdictIQ.
-    Your task is to synthesize all prior agent analyses to create a polished, professional legal intelligence report.
-
-    Input Case Context (from Agent 0):
-    {json.dumps(workspace_meta, cls=MongoJSONEncoder, indent=2)}
-
-    Input Evidence Analysis (from Agent 1):
-    {json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2)}
-
-    Input Courtroom Strategy (from Agent 2):
-    {json.dumps(agent2_strategy, cls=MongoJSONEncoder, indent=2)}
-
-    Perform the following report synthesis tasks:
-    1. EXECUTIVE CASE SUMMARY:
-       Synthesize a concise overview of the case, highlighting major legal concerns, strongest evidence, and critical vulnerabilities.
-    2. CASE STRENGTH EVALUATION:
-       Assign an overall case strength rating: "Strong Case", "Moderate Case", "Weak Case", or "High Risk Case" based on evidence and contradictions.
-    3. LEGAL REFERENCE IDENTIFICATION:
-       Identify contextually relevant acts, statutes, laws, and probable legal sections. Include descriptions of their relevance.
-       STRICT RULE: Suggest relevant sections contextually; DO NOT claim guaranteed legal applicability or provide definitive legal advice.
-    4. STRATEGIC RECOMMENDATIONS:
-       List prioritized next-step recommendations and risk mitigation strategies.
-    5. PROFESSIONAL REPORT GENERATION:
-       Compile the final consolidated report. To improve quality massively, you must avoid giant paragraphs and unreadable text walls.
-       Structure the report strictly using the following 6 sections exactly:
-       - Summary
-       - Strong Points
-       - Weak Points
-       - Missing Proof
-       - Possible Opponent Attack
-       - Recommended Action
-
-    STRICT FACTUAL GROUNDING & BEHAVIOR RULES:
-    - All report content, assessments, and recommendations must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
-    - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Write like an intelligent legal assistant speaking to a lawyer.
-    - Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
-    - Stay completely grounded in the provided facts. NEVER fabricate statutes, precedents, witness testimonies, transactions, dates, or evidence. Do NOT introduce any external facts or documents.
-    - If information is insufficient, clearly state: "Insufficient supporting evidence available."
-    - Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
-    - Add this mandatory AI disclaimer text:
-      "This AI-generated analysis is intended for legal research assistance and strategic support only. It should not be treated as definitive legal advice."
-    - Ensure there are no duplicate entries.
-
-    Return the analysis strictly as a valid JSON object matching the following structure:
-    {{
-      "executive_summary": "string",
-      "case_strength": "string",
-      "strongest_evidence": [
-        {{
-          "evidence_id": "string",
-          "file_name": "string",
-          "supporting_claim": "string",
-          "reasoning": "string"
-        }}
-      ],
-      "weak_evidence": [
-        {{
-          "evidence_id": "string",
-          "file_name": "string",
-          "reasoning": "string"
-        }}
-      ],
-      "missing_evidence": [
-        {{
-          "category": "string",
-          "description": "string",
-          "impact": "string"
-        }}
-      ],
-      "loopholes": [
-        {{
-          "title": "string",
-          "description": "string",
-          "severity": "string"
-        }}
-      ],
-      "legal_references": [
-        {{
-          "act_or_statute": "string",
-          "section": "string",
-          "relevance": "string"
-        }}
-      ],
-      "strategic_recommendations": ["string"],
-      "courtroom_risks": [
-        {{
-          "title": "string",
-          "description": "string",
-          "severity": "string"
-        }}
-      ],
-      "final_case_assessment": "string",
-      "generated_report": {{
-        "sections": [
-          {{
-            "title": "string",
-            "content": "string"
-          }}
-        ]
-      }}
-    }}
-    """
+    prompt = FINAL_REPORT_PROMPT.format(
+        lawyer_side_prefix=prefix,
+        case_context=json.dumps(workspace_meta, cls=MongoJSONEncoder, indent=2),
+        agent1_analysis=json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2),
+        agent2_strategy=json.dumps(agent2_strategy, cls=MongoJSONEncoder, indent=2)
+    )
 
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -987,6 +1035,7 @@ async def generate_final_legal_report(workspace_meta: Dict[str, Any], agent1_ana
     except Exception as e:
         logger.error(f"Gemini Agent 3 report generation failure: {e}. Falling back to dynamic mock engine.")
         return generate_mock_agent3_report(workspace_meta, agent1_analysis, agent2_strategy)
+
 
 
 def generate_mock_agent3_report(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any], agent2_strategy: Dict[str, Any]) -> Dict[str, Any]:
