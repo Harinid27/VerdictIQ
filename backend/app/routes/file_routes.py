@@ -64,6 +64,21 @@ async def upload_evidence_file(
         result = await evidence_collection.insert_one(evidence_doc)
         evidence_doc["_id"] = str(result.inserted_id)
         
+        # Trigger RAG Indexing
+        try:
+            from app.services.rag_service import RAGService
+            await RAGService.index_document(
+                file_id=evidence_doc["_id"],
+                text=extracted_text,
+                workspace_id=workspace_id,
+                file_name=file.filename,
+                evidence_type=evidence_type,
+                importance_level=importance_level
+            )
+        except Exception as rag_err:
+            import logging
+            logging.getLogger(__name__).error(f"RAG Indexing failed on upload: {rag_err}")
+
         return {
             "success": True,
             "file_url": upload_res["secure_url"],

@@ -6,7 +6,9 @@ import logging
 
 from app.middleware.auth_middleware import get_current_user
 from app.database import get_collection
-from app.services.gemini_service import analyze_case_evidence_and_risks
+from app.services.gemini_service import generate_final_legal_report
+from app.services.rag_service import RAGService
+from app.nodes.save_results import save_results_node
 
 router = APIRouter(prefix="/api/agent1", tags=["Agent 1 Auditing"])
 logger = logging.getLogger(__name__)
@@ -36,62 +38,87 @@ async def analyze_workspace_evidence(workspace_id: str, current_user: dict = Dep
     workspace_meta = await get_collection("workspaces").find_one({"workspace_id": workspace_id})
     lawyer_side = workspace_meta.get("lawyer_side") if workspace_meta else None
 
-    # 2. Call Gemini service to perform evidence audit and risk assessment
+    # Retrieve RAG context
     try:
-        analysis_result = await analyze_case_evidence_and_risks(context_doc, lawyer_side=lawyer_side)
+        rag_context = await RAGService.retrieve_relevant_context(
+            query=context_doc.get("case_summary", "")[:300],
+            workspace_id=workspace_id,
+            top_k=3
+        )
     except Exception as e:
-        logger.error(f"Failed to perform Agent 1 analysis: {e}")
+        logger.error(f"RAG context retrieval failed in Agent 1 route: {e}")
+        rag_context = ""
+
+    # Call Gemini service to perform unified Agent 3 legal intelligence
+    try:
+        merged_meta = dict(context_doc)
+        if workspace_meta:
+            merged_meta["legal_context"] = {
+                "case_title": workspace_meta.get("case_title"),
+                "case_type": workspace_meta.get("case_type"),
+                "lawyer_side": lawyer_side or "Plaintiff",
+                "client_name": workspace_meta.get("client_name"),
+                "opposing_party": workspace_meta.get("opposing_party")
+            }
+        else:
+            merged_meta["legal_context"] = {
+                "case_title": "Unnamed Case",
+                "case_type": "General Dispute",
+                "lawyer_side": lawyer_side or "Plaintiff",
+                "client_name": "Client",
+                "opposing_party": "Opponent"
+            }
+
+        analysis_result = await generate_final_legal_report(merged_meta, rag_context)
+    except Exception as e:
+        logger.error(f"Failed to perform unified Agent 3 analysis: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Agent 1 analysis execution failed: {e}"
+            detail=f"Agent 3 reasoning engine failed: {e}"
         )
 
-    # Extract risk level from risk_analysis dict
-    risk_info = analysis_result.get("risk_analysis", {})
-    risk_level = risk_info.get("risk_level", "Medium Risk")
+    # 3. Use save_results_node to map and save everything across collections
+    try:
+        state = {
+            "workspace_id": workspace_id,
+            "agent0_output": context_doc,
+            "agent3_output": analysis_result
+        }
+        await save_results_node(state)
+    except Exception as e:
+        logger.error(f"Failed to save unified analysis results: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to persist analysis results: {e}"
+        )
 
-    # 3. Formulate the document to be saved in agent1_analysis collection
-    agent1_doc = {
-        "workspace_id": workspace_id,
-        "strong_evidence": analysis_result.get("strong_evidence", []),
-        "moderate_evidence": analysis_result.get("moderate_evidence", []),
-        "weak_evidence": analysis_result.get("weak_evidence", []),
-        "unsupported_claims": analysis_result.get("unsupported_claims", []),
-        "missing_evidence": analysis_result.get("missing_evidence", []),
-        "loopholes": analysis_result.get("loopholes", []),
-        "contradictions": analysis_result.get("contradictions", []),
-        "risk_analysis": risk_info,
-        "risk_level": risk_level, # store for quick query
-        "confidence_scores": analysis_result.get("confidence_scores", []),
-        "evidence_relationships": analysis_result.get("evidence_relationships", []),
-        "prepared_for_agent2": True,
-        "prepared_for_agent3": True,
-        "generated_at": datetime.utcnow()
-    }
-
-    # 4. Save/Update in MongoDB agent1_analysis collection
+    # Fetch stored analysis for response
     agent1_collection = get_collection("agent1_analysis")
-    await agent1_collection.update_one(
-        {"workspace_id": workspace_id},
-        {"$set": agent1_doc},
-        upsert=True
-    )
+    agent1_doc = await agent1_collection.find_one({"workspace_id": workspace_id})
+    if not agent1_doc:
+        raise HTTPException(status_code=500, detail="Saved Agent 1 analysis could not be retrieved")
 
     # 5. Build response conforming to OUTPUT FORMAT
     response_analysis = {
         "workspace_id": workspace_id,
-        "strong_evidence": agent1_doc["strong_evidence"],
-        "moderate_evidence": agent1_doc["moderate_evidence"],
-        "weak_evidence": agent1_doc["weak_evidence"],
-        "unsupported_claims": agent1_doc["unsupported_claims"],
-        "missing_evidence": agent1_doc["missing_evidence"],
-        "loopholes": agent1_doc["loopholes"],
-        "contradictions": agent1_doc["contradictions"],
-        "risk_level": risk_level,
-        "confidence_scores": agent1_doc["confidence_scores"],
-        "evidence_relationships": agent1_doc["evidence_relationships"],
+        "strong_evidence": agent1_doc.get("strong_evidence", []),
+        "moderate_evidence": agent1_doc.get("moderate_evidence", []),
+        "weak_evidence": agent1_doc.get("weak_evidence", []),
+        "unsupported_claims": agent1_doc.get("unsupported_claims", []),
+        "missing_evidence": agent1_doc.get("missing_evidence", []),
+        "loopholes": agent1_doc.get("loopholes", []),
+        "contradictions": agent1_doc.get("contradictions", []),
+        "risk_level": agent1_doc.get("risk_level", "Medium Risk"),
+        "confidence_scores": agent1_doc.get("confidence_scores", []),
+        "evidence_relationships": agent1_doc.get("evidence_relationships", []),
         "prepared_for_agent2": True,
         "prepared_for_agent3": True
+    }
+
+    return {
+        "success": True,
+        "message": "Agent 1 analysis completed",
+        "analysis": response_analysis
     }
 
     return {

@@ -91,6 +91,20 @@ async def load_workspace_node(state: VerdictState) -> VerdictState:
 
     lawyer_side = workspace.get("lawyer_side", "Plaintiff")
 
+    # Load Medium-Term Memory (Previous Run Assessment)
+    previous_analysis = None
+    try:
+        prev_report_col = get_collection("agent3_final_reports")
+        prev_rep = await prev_report_col.find_one({"workspace_id": workspace_id})
+        if prev_rep:
+            previous_analysis = {
+                "executive_summary": prev_rep.get("executive_summary"),
+                "case_strength": prev_rep.get("case_strength"),
+                "generated_at": prev_rep.get("generated_at").isoformat() if isinstance(prev_rep.get("generated_at"), datetime) else str(prev_rep.get("generated_at"))
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch previous analysis memory: {e}")
+
     # Construct the case context
     case_context = {
         "workspace_meta": {
@@ -104,13 +118,23 @@ async def load_workspace_node(state: VerdictState) -> VerdictState:
             "expected_outcome": workspace.get("expected_outcome"),
             "concerns": workspace.get("concerns")
         },
-        "evidence_files": serialized_files
+        "evidence_files": serialized_files,
+        "previous_analysis": previous_analysis,
+        "rag_context": ""
     }
 
-    # Implement Hook for Future RAG Integration
-    # RAG Hook: Can retrieve relevant contextual paragraphs and inject them here
-    # from app.services.rag_service import RAGService
-    # case_context["rag_context"] = RAGService.retrieve_relevant_context("query context", workspace_id)
+    # Retrieve relevant RAG context during intake matching client claims/objectives
+    try:
+        from app.services.rag_service import RAGService
+        query_terms = workspace.get("objectives") or workspace.get("case_description") or "general dispute"
+        rag_context = await RAGService.retrieve_relevant_context(
+            query=query_terms[:300],
+            workspace_id=workspace_id,
+            top_k=3
+        )
+        case_context["rag_context"] = rag_context
+    except Exception as e:
+        logger.error(f"Failed to inject RAG context in load_workspace: {e}")
 
     # Return updated state
     return {

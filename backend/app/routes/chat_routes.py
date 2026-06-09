@@ -10,11 +10,14 @@ from dotenv import load_dotenv
 
 from app.middleware.auth_middleware import get_current_user
 from app.database import get_collection
+from app.services.rag_service import RAGService
+from app.services.gemini_service import run_chat_agent
 
 # Ensure environment variables are loaded immediately
 load_dotenv()
 
 router = APIRouter(prefix="/api/chat", tags=["AI Conversations"])
+debug_router = APIRouter(prefix="/api/debug", tags=["Diagnostics & Debugging"])
 logger = logging.getLogger(__name__)
 
 # Initialize Gemini SDK
@@ -55,253 +58,257 @@ async def ask_workspace_agent(
     payload: Dict[str, str],
     current_user: dict = Depends(get_current_user)
 ):
-    user_email = current_user["email"]
-    question = payload.get("message")
-    if not question:
-        raise HTTPException(status_code=400, detail="Message field is required")
+    try:
+        user_email = current_user["email"]
+        question = payload.get("message")
+        if not question:
+            raise HTTPException(status_code=400, detail="Message field is required")
 
-    # 1. Gather all case data for LLM context
-    # A. Workspace metadata
-    workspaces_collection = get_collection("workspaces")
-    workspace = await workspaces_collection.find_one({"workspace_id": workspace_id})
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        logger.info(f"Chat Endpoint: Loading workspace retrieval for ID: {workspace_id}")
+        
+        # 1. Gather Agent 0 + Agent 3 case data for LLM context
+        # A. Workspace metadata
+        workspaces_collection = get_collection("workspaces")
+        workspace = await workspaces_collection.find_one({"workspace_id": workspace_id})
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found")
 
-    # B. Structured case context (Agent 0)
-    scc_collection = get_collection("structured_case_context")
-    context_doc = await scc_collection.find_one({"workspace_id": workspace_id})
-    
-    # C. Auditing (Agent 1)
-    agent1_collection = get_collection("agent1_analysis")
-    a1_doc = await agent1_collection.find_one({"workspace_id": workspace_id})
+        # B. Structured case context (Agent 0)
+        scc_collection = get_collection("structured_case_context")
+        context_doc = await scc_collection.find_one({"workspace_id": workspace_id})
+        
+        # C. Synthesis Report (Agent 3)
+        agent3_collection = get_collection("agent3_final_reports")
+        a3_doc = await agent3_collection.find_one({"workspace_id": workspace_id})
 
-    # D. Strategy (Agent 2)
-    agent2_collection = get_collection("agent2_strategy")
-    a2_doc = await agent2_collection.find_one({"workspace_id": workspace_id})
+        # Make sure we have analysis ready
+        if not a3_doc:
+            raise HTTPException(
+                status_code=400,
+                detail="Chat is locked. Please run the AI Agent pipeline to generate the case report first."
+            )
 
-    # E. Synthesis Report (Agent 3)
-    agent3_collection = get_collection("agent3_final_reports")
-    a3_doc = await agent3_collection.find_one({"workspace_id": workspace_id})
-
-    # Make sure we have analysis ready
-    if not a3_doc:
-        raise HTTPException(
-            status_code=400,
-            detail="Chat is locked. Please run the AI Agent pipeline to generate the case report first."
+        # 2. Retrieve document context via RAG
+        logger.info(f"Chat Endpoint: Querying RAG context for question: '{question[:50]}'")
+        rag_context = await RAGService.retrieve_relevant_context(
+            query=question,
+            workspace_id=workspace_id,
+            top_k=3
         )
 
-    # 2. Build contextual prompt for the routing agent
-    context_data = {
-        "workspace": {
-            "title": workspace.get("case_title"),
-            "type": workspace.get("case_type"),
-            "side": workspace.get("lawyer_side"),
-            "client": workspace.get("client_name"),
-            "opponent": workspace.get("opposing_party"),
-            "description": workspace.get("case_description"),
-            "objectives": workspace.get("objectives"),
-            "concerns": workspace.get("concerns")
-        },
-        "structured_context": {
-            "summary": context_doc.get("case_summary") if context_doc else "",
-            "timeline": context_doc.get("timeline") if context_doc else [],
-            "key_entities": context_doc.get("key_entities") if context_doc else [],
-            "claims": context_doc.get("claims") if context_doc else []
-        },
-        "evidence_audit": {
-            "strong_evidence": a1_doc.get("strong_evidence") if a1_doc else [],
-            "weak_evidence": a1_doc.get("weak_evidence") if a1_doc else [],
-            "missing_evidence": a1_doc.get("missing_evidence") if a1_doc else [],
-            "loopholes": a1_doc.get("loopholes") if a1_doc else [],
-            "contradictions": a1_doc.get("contradictions") if a1_doc else []
-        },
-        "courtroom_strategy": {
-            "lawyer_arguments": a2_doc.get("lawyer_arguments") if a2_doc else [],
-            "opponent_counterarguments": a2_doc.get("opponent_counterarguments") if a2_doc else [],
-            "rebuttal_strategies": a2_doc.get("rebuttal_strategies") if a2_doc else [],
-            "courtroom_risks": a2_doc.get("courtroom_risks") if a2_doc else [],
-            "recommendations": a2_doc.get("strategic_recommendations") if a2_doc else []
-        },
-        "final_report": {
-            "executive_summary": a3_doc.get("executive_summary") if a3_doc else "",
-            "case_strength": a3_doc.get("case_strength") if a3_doc else "",
-            "legal_references": a3_doc.get("legal_references") if a3_doc else [],
-            "final_assessment": a3_doc.get("final_case_assessment") if a3_doc else ""
+        # Fetch recent message history
+        chats_collection = get_collection("workspace_chats")
+        cursor = chats_collection.find({"workspace_id": workspace_id}).sort("timestamp", -1).limit(10)
+        history_docs = await cursor.to_list(length=10)
+        history_docs.reverse()
+        
+        formatted_history = []
+        for h in history_docs:
+            role = "User" if h["sender"] == "user" else h.get("agent_name", "AI Agent")
+            formatted_history.append(f"{role}: {h['text']}")
+        history_str = "\n".join(formatted_history)
+
+        # 3. Call Gemini Chat Agent (Agent 3 Chatbot)
+        logger.info(f"Chat Endpoint: Executing Gemini call for workspace: {workspace_id}")
+        
+        agent4_res = await run_chat_agent(
+            case_summary=context_doc.get("case_summary", "") if context_doc else "",
+            claims=context_doc.get("claims", []) if context_doc else [],
+            evidence_audit={},  # Removed Agent 1
+            courtroom_strategy={},  # Removed Agent 2
+            final_report=a3_doc or {},
+            rag_context=rag_context,
+            chat_history=history_str,
+            question=question,
+            lawyer_side=workspace.get("lawyer_side")
+        )
+
+        # Format Agent 3 Chatbot response
+        reply_text = f"[Agent 3 Chatbot Assistant]\n{agent4_res['answer']}"
+        
+        # Save User message
+        user_msg_doc = {
+            "workspace_id": workspace_id,
+            "sender": "user",
+            "text": question,
+            "timestamp": datetime.utcnow()
         }
-    }
+        await chats_collection.insert_one(user_msg_doc)
 
-    # Fetch recent message history
-    chats_collection = get_collection("workspace_chats")
-    cursor = chats_collection.find({"workspace_id": workspace_id}).sort("timestamp", -1).limit(10)
-    history_docs = await cursor.to_list(length=10)
-    history_docs.reverse()
-    
-    formatted_history = []
-    for h in history_docs:
-        role = "User" if h["sender"] == "user" else h.get("agent_name", "AI Agent")
-        formatted_history.append(f"{role}: {h['text']}")
-    history_str = "\n".join(formatted_history)
+        # Save Agent response
+        agent_msg_doc = {
+            "workspace_id": workspace_id,
+            "sender": "agent",
+            "agent_name": "Agent 3 Chatbot Assistant",
+            "text": reply_text,
+            "timestamp": datetime.utcnow()
+        }
+        await chats_collection.insert_one(agent_msg_doc)
 
-    side_lower = (workspace.get("lawyer_side") or "").lower()
-    prefix = "You are assisting the DEFENSE lawyer." if ("defense" in side_lower or "defendant" in side_lower) else "You are assisting the PROSECUTION lawyer."
+        return {
+            "success": True,
+            "data": serialize_mongo_doc(agent_msg_doc)
+        }
+    except Exception as e:
+        logger.exception("Chat Agent Error")
+        return {
+            "success": False,
+            "error_type": str(type(e).__name__),
+            "error_message": str(e),
+            "message": str(e)
+        }
 
-    prompt = f"""
-    {prefix}
-    You are the VerdictIQ Multi-Agent Routing and Cognitive Coordinator.
-    
-    A lawyer is asking a question regarding an active legal case workspace.
-    Your task is twofold:
-    1. Determine which of the three specialized legal AI agents is best suited to answer this question.
-       - Agent 1: Case Analysis Agent (Evidence auditing, weaknesses, missing evidence, loopholes, contradictions, risk assessments)
-       - Agent 2: Courtroom Strategy Agent (Trial arguments, predicting opposition counterarguments, rebuttals, sequence of proof)
-       - Agent 3: Legal Intelligence & Report Agent (Consolidated final report, professional summaries, legal references, recommendations, case assessment)
-       
-    2. Answer the question in character as that selected agent.
-       - IMPORTANT: Start your response with the agent designation header exactly, e.g. '[Agent 1 - Case Analysis Agent]' or '[Agent 2 - Courtroom Strategy Agent]' or '[Agent 3 - Legal Intelligence & Report Agent]'.
-       - Deliver an evidence-grounded, professional, and clinical legal answer based strictly on the provided case data.
-       - STRICT FACTUAL GROUNDING RULE: You must ONLY refer to documents, facts, dates, timeline events, and entities that are present in the provided Case Context Data or the Recent Chat History. Do NOT assume, extrapolate, or invent any files, contracts, verbal agreements, names, or legal conclusions. If information is insufficient, state "Insufficient supporting evidence available."
-       - If the user asks about a detail or document not present in the context, explicitly state: "This detail/document is not present in the workspace files."
-       - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Write like an intelligent legal assistant speaking to a lawyer.
-       - Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
-       - STRUCTURE YOUR RESPONSE: Avoid giant paragraphs and unreadable text walls. You must structure your findings/answers using these exact sections where applicable:
-         ### Summary
-         ### Strong Points
-         ### Weak Points
-         ### Missing Proof
-         ### Possible Opponent Attack
-         ### Recommended Action
-       - Keep responses concise, clear, and practical.
-
-    Case Context Data:
-    {json.dumps(context_data, cls=MongoJSONEncoder, indent=2)}
-
-    Recent Chat History:
-    {history_str}
-
-    User Question:
-    "{question}"
-
-    Let's think step by step: which agent is most answerable, and what is the best professional response?
+@debug_router.get("/workspace/{workspace_id}")
+async def get_workspace_debug(workspace_id: str, current_user: dict = Depends(get_current_user)):
     """
-
-    agent_name = "Agent 3 - Legal Intelligence & Report Agent"
-    reply_text = ""
-
-    if IS_MOCK_GEMINI:
-        # Mock Routing & Answer based dynamically on actual context
-        lower_q = question.lower()
-        client = workspace.get("client_name") or "Client"
-        opponent = workspace.get("opposing_party") or "Opponent"
-        case_type = workspace.get("case_type") or "General Dispute"
+    GET /api/debug/workspace/{workspace_id}
+    Returns availability of agents, history size, context size, and doc count.
+    """
+    try:
+        logger.info(f"Debug: Fetching info for workspace_id: {workspace_id}")
         
-        strong_ev = context_data.get("evidence_audit", {}).get("strong_evidence", [])
+        # 1. Agent 0 context
+        scc_collection = get_collection("structured_case_context")
+        context_doc = await scc_collection.find_one({"workspace_id": workspace_id})
+        agent0_avail = bool(context_doc)
         
-        if any(w in lower_q for w in ["loophole", "weak", "evidence", "contradict", "missing", "risk"]):
-            agent_name = "Agent 1 - Case Analysis Agent"
-            ev_summary = f"including files: {', '.join([item.get('file_name', 'Document') for item in strong_ev])}" if strong_ev else "none"
-            missing_desc = ', '.join([m.get('description', '') for m in context_data.get("evidence_audit", {}).get("missing_evidence", [])]) or "Additional corroboration documents"
-            reply_text = f"""[Agent 1 - Case Analysis Agent]
-### Summary
-Audited case analysis for the {case_type} between {client} and {opponent}.
-
-### Strong Points
-Verified evidence: {ev_summary}.
-
-### Weak Points
-Gaps in documentation and electronic verification metadata.
-
-### Missing Proof
-Missing critical evidence: {missing_desc}.
-
-### Possible Opponent Attack
-Targeting the chain of custody or authenticity of electronic documents.
-
-### Recommended Action
-Obtain metadata validation reports and verify the timeline entries."""
+        # 2. Agent 1 audit
+        agent1_collection = get_collection("agent1_analysis")
+        a1_doc = await agent1_collection.find_one({"workspace_id": workspace_id})
+        agent1_avail = bool(a1_doc)
+        
+        # 3. Agent 2 strategy
+        agent2_collection = get_collection("agent2_strategy")
+        a2_doc = await agent2_collection.find_one({"workspace_id": workspace_id})
+        agent2_avail = bool(a2_doc)
+        
+        # 4. Agent 3 report
+        agent3_collection = get_collection("agent3_final_reports")
+        a3_doc = await agent3_collection.find_one({"workspace_id": workspace_id})
+        agent3_avail = bool(a3_doc)
+        
+        # 5. Chats
+        chats_collection = get_collection("workspace_chats")
+        chat_count = await chats_collection.count_documents({"workspace_id": workspace_id})
+        
+        # 6. Context size calculation
+        context_size = 0
+        if context_doc:
+            context_size += len(context_doc.get("case_summary", ""))
+            context_size += len(json.dumps(context_doc.get("claims", [])))
+            context_size += len(json.dumps(context_doc.get("timeline", [])))
             
-        elif any(w in lower_q for w in ["argument", "opposing", "opponent", "attack", "rebut", "court", "trial"]):
-            agent_name = "Agent 2 - Courtroom Strategy Agent"
-            side = workspace.get("lawyer_side") or "counsel"
-            reply_text = f"""[Agent 2 - Courtroom Strategy Agent]
-### Summary
-Simulating courtroom strategy for the {side} representing {client}.
+        # 7. Document count
+        evidence_collection = get_collection("evidence")
+        doc_count = await evidence_collection.count_documents({"workspace_id": workspace_id})
+        
+        return {
+            "success": True,
+            "workspace_id": workspace_id,
+            "agent0_available": agent0_avail,
+            "agent1_available": agent1_avail,
+            "agent2_available": agent2_avail,
+            "agent3_available": agent3_avail,
+            "chat_history_size": chat_count,
+            "context_size_chars": context_size,
+            "document_count": doc_count
+        }
+    except Exception as e:
+        logger.exception("Debug Endpoint Error")
+        return {
+            "success": False,
+            "error_type": str(type(e).__name__),
+            "error_message": str(e)
+        }
 
-### Strong Points
-Assertion of liability under the claims backed by available timeline evidence.
-
-### Weak Points
-Vulnerabilities in proving strict compliance and oral notifications.
-
-### Missing Proof
-Written confirmation of notice and signed statements.
-
-### Possible Opponent Attack
-Opposing counsel will target procedural gaps and argue waiver or estoppel.
-
-### Recommended Action
-Prioritize arguments that rely on undisputed written timeline records and exclude verbal interactions."""
+@debug_router.post("/test-chat/{workspace_id}")
+async def test_chat_diagnostic(
+    workspace_id: str,
+    payload: Dict[str, str],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    POST /api/debug/test-chat/{workspace_id}
+    Returns diagnostic details: retrieved context, generated prompt, token estimate, response, and parsing.
+    """
+    try:
+        question = payload.get("message")
+        if not question:
+            raise HTTPException(status_code=400, detail="Message field is required")
             
+        # 1. RAG retrieval
+        logger.info(f"Diagnostic: Querying RAG context for question: {question[:50]}")
+        retrieved_context = await RAGService.retrieve_relevant_context(question, workspace_id, top_k=3)
+        
+        # 2. Gather context
+        workspaces_collection = get_collection("workspaces")
+        workspace = await workspaces_collection.find_one({"workspace_id": workspace_id})
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+            
+        context_doc = await get_collection("structured_case_context").find_one({"workspace_id": workspace_id})
+        a1_doc = await get_collection("agent1_analysis").find_one({"workspace_id": workspace_id})
+        a2_doc = await get_collection("agent2_strategy").find_one({"workspace_id": workspace_id})
+        a3_doc = await get_collection("agent3_final_reports").find_one({"workspace_id": workspace_id})
+        
+        # Format chat history
+        chats_collection = get_collection("workspace_chats")
+        cursor = chats_collection.find({"workspace_id": workspace_id}).sort("timestamp", -1).limit(5)
+        history_docs = await cursor.to_list(length=5)
+        history_docs.reverse()
+        
+        formatted_history = []
+        for h in history_docs:
+            role = "User" if h["sender"] == "user" else h.get("agent_name", "AI Agent")
+            formatted_history.append(f"{role}: {h['text']}")
+        history_str = "\n".join(formatted_history)
+        
+        # 3. Construct prompt
+        from app.services.gemini_service import LEGAL_CHAT_PROMPT, get_lawyer_side_prefix
+        prefix = get_lawyer_side_prefix(workspace.get("lawyer_side"))
+        prompt = LEGAL_CHAT_PROMPT.format(
+            lawyer_side_prefix=prefix,
+            case_summary=context_doc.get("case_summary", "") if context_doc else "",
+            claims=json.dumps(context_doc.get("claims", []) if context_doc else []),
+            evidence_audit=json.dumps(a1_doc or {}),
+            courtroom_strategy=json.dumps(a2_doc or {}),
+            final_report=json.dumps(a3_doc or {}),
+            rag_context=retrieved_context or "No context retrieved.",
+            chat_history=history_str or "No history.",
+            question=question
+        )
+        
+        token_estimate = len(prompt) // 4
+        
+        # 4. Invoke Gemini (if not mock)
+        gemini_response = ""
+        parsing_result = {}
+        
+        from app.services.gemini_service import IS_MOCK_GEMINI, validate_and_parse_json, Agent4Output
+        if IS_MOCK_GEMINI:
+            gemini_response = '{"answer": "Mock diagnostic reply", "supporting_context": [], "confidence": "High"}'
+            parsing_result = json.loads(gemini_response)
         else:
-            agent_name = "Agent 3 - Legal Intelligence & Report Agent"
-            strength = context_data.get("final_report", {}).get("case_strength") or "Moderate"
-            reply_text = f"""[Agent 3 - Legal Intelligence & Report Agent]
-### Summary
-Synthesized case intelligence report for case '{workspace.get('case_title')}'. Case strength is evaluated as {strength}.
-
-### Strong Points
-Documented contract timeline and primary transaction records.
-
-### Weak Points
-Uncorroborated timeline assertions and potential waiver risks.
-
-### Missing Proof
-Third-party verification of digital metadata.
-
-### Possible Opponent Attack
-Burden-of-proof challenging arguments targeting our timeline details.
-
-### Recommended Action
-Reference general civil procedures and evidence codes governing burden of proof to address evidentiary gaps."""
-    else:
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-3.5-flash")
             response = model.generate_content(
-                prompt
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
             )
-            reply_text = response.text.strip()
+            gemini_response = response.text.strip()
+            parsing_result = validate_and_parse_json(gemini_response, Agent4Output)
             
-            # Extract agent name from header if possible
-            if reply_text.startswith("[Agent 1"):
-                agent_name = "Agent 1 - Case Analysis Agent"
-            elif reply_text.startswith("[Agent 2"):
-                agent_name = "Agent 2 - Courtroom Strategy Agent"
-            elif reply_text.startswith("[Agent 3"):
-                agent_name = "Agent 3 - Legal Intelligence & Report Agent"
-        except Exception as e:
-            logger.error(f"Failed to query Gemini for chat: {e}")
-            agent_name = "Agent 3 - Legal Intelligence & Report Agent"
-            reply_text = f"[Agent 3 - Legal Intelligence & Report Agent] An error occurred while communicating with the AI reasoning system. Case summary remains ready."
-
-    # 3. Save User message
-    user_msg_doc = {
-        "workspace_id": workspace_id,
-        "sender": "user",
-        "text": question,
-        "timestamp": datetime.utcnow()
-    }
-    await chats_collection.insert_one(user_msg_doc)
-
-    # 4. Save Agent response
-    agent_msg_doc = {
-        "workspace_id": workspace_id,
-        "sender": "agent",
-        "agent_name": agent_name,
-        "text": reply_text,
-        "timestamp": datetime.utcnow()
-    }
-    await chats_collection.insert_one(agent_msg_doc)
-
-    return {
-        "success": True,
-        "data": serialize_mongo_doc(agent_msg_doc)
-    }
+        return {
+            "success": True,
+            "retrieved_context": retrieved_context,
+            "generated_prompt": prompt,
+            "token_estimate": token_estimate,
+            "gemini_response_raw": gemini_response,
+            "parsing_result": parsing_result
+        }
+    except Exception as e:
+        logger.exception("Chat Diagnostic Endpoint Error")
+        return {
+            "success": False,
+            "error_type": str(type(e).__name__),
+            "error_message": str(e)
+        }

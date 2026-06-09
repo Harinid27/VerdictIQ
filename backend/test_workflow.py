@@ -44,6 +44,7 @@ async def run_test():
             "case_context": None,
             "agent0_output": None,
             "agent1_output": None,
+            "legal_research_output": None,
             "agent2_output": None,
             "agent3_output": None,
             "current_stage": "started"
@@ -55,12 +56,19 @@ async def run_test():
         logger.info("=== LANGGRAPH WORKFLOW COMPLETE ===")
         logger.info(f"Final stage: {final_state.get('current_stage')}")
         logger.info(f"Agent 0 Output Generated: {bool(final_state.get('agent0_output'))}")
-        logger.info(f"Agent 1 Output Generated: {bool(final_state.get('agent1_output'))}")
-        logger.info(f"Agent 2 Output Generated: {bool(final_state.get('agent2_output'))}")
         logger.info(f"Agent 3 Output Generated: {bool(final_state.get('agent3_output'))}")
         
         # Verify persistence
         logger.info("Verifying persistence in MongoDB...")
+        
+        a1_col = get_collection("agent1_analysis")
+        a1_doc = await a1_col.find_one({"workspace_id": workspace_id})
+        logger.info(f"Verified MongoDB 'agent1_analysis' document exists: {bool(a1_doc)}")
+        
+        a2_col = get_collection("agent2_strategy")
+        a2_doc = await a2_col.find_one({"workspace_id": workspace_id})
+        logger.info(f"Verified MongoDB 'agent2_strategy' document exists: {bool(a2_doc)}")
+
         agent3_collection = get_collection("agent3_final_reports")
         report = await agent3_collection.find_one({"workspace_id": workspace_id})
         logger.info(f"Verified MongoDB 'agent3_final_reports' document exists: {bool(report)}")

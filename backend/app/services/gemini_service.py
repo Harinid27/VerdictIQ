@@ -8,6 +8,16 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from langchain_core.prompts import PromptTemplate
 
+# Load Pydantic Schemas for validation
+from app.schemas.case_schema import (
+    Agent0Output,
+    Agent1Output,
+    LegalResearchOutput,
+    Agent2Output,
+    Agent3Output,
+    Agent4Output
+)
+
 # Ensure environment variables are loaded immediately
 load_dotenv()
 
@@ -41,6 +51,29 @@ def get_lawyer_side_prefix(lawyer_side: str) -> str:
     else:
         return "You are assisting the PROSECUTION lawyer.\n"
 
+def validate_and_parse_json(raw_text: str, pydantic_schema: Any) -> Dict[str, Any]:
+    """
+    Cleans markdown code fences, parses JSON, and validates it against a Pydantic schema.
+    """
+    cleaned_text = raw_text.strip()
+    if cleaned_text.startswith("```"):
+        lines = cleaned_text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned_text = "\n".join(lines).strip()
+    
+    if not cleaned_text.startswith("{") and "{" in cleaned_text:
+        cleaned_text = cleaned_text[cleaned_text.find("{"):]
+    if not cleaned_text.endswith("}") and "}" in cleaned_text:
+        cleaned_text = cleaned_text[:cleaned_text.rfind("}")+1]
+
+    parsed_json = json.loads(cleaned_text)
+    validated_model = pydantic_schema.model_validate(parsed_json)
+    return validated_model.model_dump()
+
+
 DOCUMENT_ANALYSIS_PROMPT = PromptTemplate(
     input_variables=["lawyer_side_prefix", "filename", "doc_description", "text"],
     template="""{lawyer_side_prefix}
@@ -53,8 +86,10 @@ Extract:
 
 STRICT FACTUAL GROUNDING RULES:
 - You must ONLY extract information directly present in the provided Document Text.
+- If the actual Document Text conflicts or contradicts the provided Description (Description: {doc_description}), the actual Document Text takes absolute precedence. You must extract information and entities strictly from the Document Text, and explicitly note the contradiction in the 'ai_summary' (e.g., "WARNING: Contradiction detected - user description states X, but document text contains Y").
+- If the Document Text is a placeholder indicating a media/video/image file (e.g., starts with '[Evidence document content...' or '[Scanned Image Evidence...'), treat the User-provided Description as the primary source of truth for the file's context.
 - Do NOT assume, extrapolate, or invent any entities, dates, or details.
-- If a category of entities has no entries in the document text, return an empty list for that category. Do NOT invent placeholders.
+- If a category of entities has no entries in the document text (or in the description if the text is a placeholder), return an empty list for that category. Do NOT invent placeholders.
 
 ADDITIONAL INSTRUCTIONS:
 - Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon.
@@ -183,7 +218,7 @@ async def analyze_document_text(text: str, filename: str, doc_description: str, 
     )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json"}
@@ -233,13 +268,12 @@ async def generate_structured_case_context(workspace_meta: Dict[str, Any], docum
     )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        data = json.loads(response.text)
-        return data
+        return validate_and_parse_json(response.text, Agent0Output)
     except Exception as e:
         logger.error(f"Gemini aggregate case structuring error: {e}. Falling back to dynamic mock data.")
         return generate_mock_case_context(workspace_meta, document_analyses)
@@ -548,13 +582,33 @@ async def analyze_case_evidence_and_risks(structured_context: Dict[str, Any], la
     )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        data = json.loads(response.text)
-        return data
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+        if not raw_text.startswith("{") and "{" in raw_text:
+            raw_text = raw_text[raw_text.find("{"):]
+        if not raw_text.endswith("}") and "}" in raw_text:
+            raw_text = raw_text[:raw_text.rfind("}")+1]
+        
+        parsed_json = json.loads(raw_text)
+        risk_info = parsed_json.get("risk_analysis", {})
+        if "risk_level" not in parsed_json and "risk_level" in risk_info:
+            parsed_json["risk_level"] = risk_info["risk_level"]
+        elif "risk_level" not in parsed_json:
+            parsed_json["risk_level"] = "Medium Risk"
+            
+        validated_model = Agent1Output.model_validate(parsed_json)
+        return validated_model.model_dump()
     except Exception as e:
         logger.error(f"Gemini Agent 1 analysis failure: {e}. Falling back to dynamic mock engine.")
         return generate_mock_agent1_analysis(structured_context, lawyer_side=lawyer_side)
@@ -663,6 +717,7 @@ def generate_mock_agent1_analysis(structured_context: Dict[str, Any], lawyer_sid
         "missing_evidence": missing_evidence,
         "loopholes": loopholes,
         "contradictions": contradictions,
+        "risk_level": "Medium Risk" if evidence_rel else "Critical Risk",
         "risk_analysis": {
             "risk_level": "Medium Risk" if evidence_rel else "Critical Risk",
             "vulnerabilities": [
@@ -677,7 +732,7 @@ def generate_mock_agent1_analysis(structured_context: Dict[str, Any], lawyer_sid
     }
 
 COURTROOM_STRATEGY_PROMPT = PromptTemplate(
-    input_variables=["lawyer_side_prefix", "lawyer_side", "case_context", "agent1_analysis"],
+    input_variables=["lawyer_side_prefix", "lawyer_side", "case_context", "agent1_analysis", "legal_research"],
     template="""{lawyer_side_prefix}
 You are Agent 2, the "AI Courtroom Strategy & Adversarial Reasoning Engine" for VerdictIQ.
 Your objective is to simulate courtroom reasoning and generate tactical courtroom strategy intelligence.
@@ -695,6 +750,9 @@ Input Case Context (from Agent 0):
 
 Input Evidence Auditing (from Agent 1):
 {agent1_analysis}
+
+Input Legal Research & Precedents (from Legal Research Agent):
+{legal_research}
 
 Perform the following adversarial simulations:
 1. LAWYER ARGUMENT GENERATION:
@@ -770,10 +828,10 @@ Return the analysis strictly as a valid JSON object matching the following struc
 }}"""
 )
 
-async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any], legal_research: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Agent 2 Room strategy simulation using Gemini.
-    Consumes both Agent 0 context and Agent 1 auditing data to generate trial-ready strategies.
+    Consumes both Agent 0 context, Agent 1 auditing data, and Legal Research outputs to generate trial-ready strategies.
     """
     if IS_MOCK_GEMINI:
         logger.info("Generating dynamic mock Agent 2 courtroom strategy...")
@@ -786,17 +844,35 @@ async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_ana
         lawyer_side_prefix=prefix,
         lawyer_side=lawyer_side,
         case_context=json.dumps(workspace_meta, cls=MongoJSONEncoder, indent=2),
-        agent1_analysis=json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2)
+        agent1_analysis=json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2),
+        legal_research=json.dumps(legal_research or {}, cls=MongoJSONEncoder, indent=2)
     )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        data = json.loads(response.text)
-        return data
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+        if not raw_text.startswith("{") and "{" in raw_text:
+            raw_text = raw_text[raw_text.find("{"):]
+        if not raw_text.endswith("}") and "}" in raw_text:
+            raw_text = raw_text[:raw_text.rfind("}")+1]
+        
+        parsed_json = json.loads(raw_text)
+        if "lawyer_side" not in parsed_json:
+            parsed_json["lawyer_side"] = lawyer_side
+            
+        validated_model = Agent2Output.model_validate(parsed_json)
+        return validated_model.model_dump()
     except Exception as e:
         logger.error(f"Gemini Agent 2 strategy failure: {e}. Falling back to dynamic mock engine.")
         return generate_mock_agent2_strategy(workspace_meta, agent1_analysis)
@@ -889,6 +965,7 @@ def generate_mock_agent2_strategy(workspace_meta: Dict[str, Any], agent1_analysi
         })
 
     return {
+        "lawyer_side": lawyer_side,
         "lawyer_arguments": lawyer_arguments,
         "opponent_counterarguments": opponent_counterarguments,
         "rebuttal_strategies": rebuttal_strategies,
@@ -900,213 +977,401 @@ def generate_mock_agent2_strategy(workspace_meta: Dict[str, Any], agent1_analysi
 
 
 FINAL_REPORT_PROMPT = PromptTemplate(
-    input_variables=["lawyer_side_prefix", "case_context", "agent1_analysis", "agent2_strategy"],
+    input_variables=["lawyer_side_prefix", "lawyer_side", "case_context", "rag_context"],
     template="""{lawyer_side_prefix}
-You are Agent 3, the "AI Legal Intelligence Synthesis & Final Reporting Engine" for VerdictIQ.
-Your task is to synthesize all prior agent analyses to create a polished, professional legal intelligence report.
+You are Agent 3, the rewritten "FULL LEGAL INTELLIGENCE ENGINE & Report Generation Agent" for VerdictIQ.
+You are the single reasoning + generation engine for this workspace.
 
-Input Case Context (from Agent 0):
+Your objective is to consume the structured case context (Agent 0) and any retrieved legal/factual context from RAG, perform evidence analysis, legal strategy generation, legal mapping, and final report generation in sequence, and return the final report.
+
+Stated side you are representing: {lawyer_side}
+STRICT RULE: All analysis, arguments, risks, and recommendations must align with the represented side (Defense or Prosecution/Plaintiff).
+
+Structured Case Context (from Agent 0):
 {case_context}
 
-Input Evidence Analysis (from Agent 1):
-{agent1_analysis}
+Retrieved Legal/Factual Context (RAG):
+{rag_context}
 
-Input Courtroom Strategy (from Agent 2):
-{agent2_strategy}
+Perform the following 4 steps in sequence:
 
-Perform the following report synthesis tasks:
-1. EXECUTIVE CASE SUMMARY:
-   Synthesize a concise overview of the case, highlighting major legal concerns, strongest evidence, and critical vulnerabilities.
-2. CASE STRENGTH EVALUATION:
-   Assign an overall case strength rating: "Strong Case", "Moderate Case", "Weak Case", or "High Risk Case" based on evidence and contradictions.
-3. LEGAL REFERENCE IDENTIFICATION:
-   Identify contextually relevant acts, statutes, laws, and probable legal sections. Include descriptions of their relevance.
-   STRICT RULE: Suggest relevant sections contextually; DO NOT claim guaranteed legal applicability or provide definitive legal advice.
-4. STRATEGIC RECOMMENDATIONS:
-   List prioritized next-step recommendations and risk mitigation strategies.
-5. PROFESSIONAL REPORT GENERATION:
-   Compile the final consolidated report. To improve quality massively, you must avoid giant paragraphs and unreadable text walls.
-   Structure the report strictly using the following 6 sections exactly:
-   - Summary
-   - Strong Points
-   - Weak Points
-   - Missing Proof
-   - Possible Opponent Attack
-   - Recommended Action
+### STEP 1: Evidence Analysis
+- Classify evidence as strong / weak / irrelevant. Use the actual evidence list/timeline from Agent 0.
+- Detect contradictions/inconsistencies (e.g. conflicting dates, facts, or narratives).
+- Identify missing evidence/gaps in proof.
+- Assess evidence reliability.
+
+### STEP 2: Legal Strategy Generation
+- Generate arguments for your side (Defense or Prosecution/Plaintiff).
+- Generate opponent counterarguments/attacks.
+- Identify weaknesses in your strategy.
+- Suggest rebuttals to predicted opponent counterarguments.
+
+### STEP 3: Legal Mapping
+- Identify relevant legal sections (e.g., IPC, CrPC, CPC, or jurisdiction-specific laws based on the case details).
+- Map facts to legal provisions.
+- Explain applicability of laws in simple language.
+- Highlight burden of proof requirements.
+- Identify legal thresholds and compliance gaps.
+- STRICT RULE: NEVER hallucinate legal sections. If unsure, say "Not enough information to determine exact section".
+
+### STEP 4: Final Report Generation
+Compile everything into a structured legal report (Executive Summary, Case Overview, Evidence Analysis, Missing Evidence, Legal Arguments (Both Sides), Legal Sections & Applicability, Risks & Weaknesses, Strategic Recommendations, Final Case Assessment Score).
 
 STRICT FACTUAL GROUNDING & BEHAVIOR RULES:
-- All report content, assessments, and recommendations must align with the selected lawyer side: support the prosecution perspective if Prosecution/Plaintiff, and support the defense perspective if Defense/Defendant.
-- Explain findings in simple, practical, lawyer-friendly language. Avoid robotic AI wording and unnecessarily complex legal jargon. Write like an intelligent legal assistant speaking to a lawyer.
-- Think practically and logically. Focus on realistic courtroom terms: what can realistically help the lawyer, what opposing counsel may attack, and what proof is actually convincing.
-- Stay completely grounded in the provided facts. NEVER fabricate statutes, precedents, witness testimonies, transactions, dates, or evidence. Do NOT introduce any external facts or documents.
-- If information is insufficient, clearly state: "Insufficient supporting evidence available."
-- Avoid exaggerated AI behavior: do NOT act like a judge, claim legal certainty, or predict guaranteed outcomes. Instead, use cautious legal-assistant language (e.g., "may weaken the case", "could be challenged", "appears unsupported", "likely strengthens the claim").
-- Add this mandatory AI disclaimer text:
-  "This AI-generated analysis is intended for legal research assistance and strategic support only. It should not be treated as definitive legal advice."
-- Ensure there are no duplicate entries.
+- Use simple, human legal language. Avoid overly academic tone.
+- Do NOT call external systems or invent any witnesses, files, transactions, dates, or precedents. Ground everything strictly in the provided evidence and structured case data.
+- For evidence classification, if no evidence is provided, state "Insufficient supporting evidence available."
+- Assign a final_score between 0 and 100 representing case favorability/strength.
 
-Return the analysis strictly as a valid JSON object matching the following structure:
+You must return the analysis strictly as a valid JSON object matching the following structure:
 {{
-  "executive_summary": "string",
-  "case_strength": "string",
-  "strongest_evidence": [
-    {{
-      "evidence_id": "string",
-      "file_name": "string",
-      "supporting_claim": "string",
-      "reasoning": "string"
-    }}
-  ],
-  "weak_evidence": [
-    {{
-      "evidence_id": "string",
-      "file_name": "string",
-      "reasoning": "string"
-    }}
-  ],
-  "missing_evidence": [
-    {{
-      "category": "string",
-      "description": "string",
-      "impact": "string"
-    }}
-  ],
-  "loopholes": [
-    {{
-      "title": "string",
-      "description": "string",
-      "severity": "string"
-    }}
-  ],
-  "legal_references": [
+  "evidence_analysis": {{
+    "strong_evidence": [
+      {{
+        "evidence_id": "string",
+        "file_name": "string",
+        "supporting_claim": "string",
+        "reasoning": "string"
+      }}
+    ],
+    "moderate_evidence": [
+      {{
+        "evidence_id": "string",
+        "file_name": "string",
+        "supporting_claim": "string",
+        "reasoning": "string"
+      }}
+    ],
+    "weak_evidence": [
+      {{
+        "evidence_id": "string",
+        "file_name": "string",
+        "reasoning": "string"
+      }}
+    ],
+    "unsupported_claims": [
+      {{
+        "claim": "string",
+        "reasoning": "string"
+      }}
+    ],
+    "missing_evidence": [
+      {{
+        "category": "string",
+        "description": "string",
+        "impact": "string"
+      }}
+    ],
+    "loopholes": [
+      {{
+        "title": "string",
+        "description": "string",
+        "severity": "string"
+      }}
+    ],
+    "contradictions": [
+      {{
+        "item_a": "string",
+        "item_b": "string",
+        "discrepancy": "string"
+      }}
+    ],
+    "confidence_scores": [
+      {{
+        "claim": "string",
+        "confidence_score": 85
+      }}
+    ]
+  }},
+  "legal_arguments": {{
+    "lawyer_side": [
+      {{
+        "argument": "string",
+        "strength": "string",
+        "claim_id": "string",
+        "evidence_support": ["string"]
+      }}
+    ],
+    "opponent_side": [
+      {{
+        "attack_vector": "string",
+        "explanation": "string",
+        "rebuttal_strategy": "string",
+        "evidence_targeted": ["string"]
+      }}
+    ]
+  }},
+  "legal_sections": [
     {{
       "act_or_statute": "string",
       "section": "string",
-      "relevance": "string"
+      "relevance": "string",
+      "simple_explanation": "string",
+      "burden_of_proof": "string",
+      "compliance_gap": "string"
     }}
   ],
-  "strategic_recommendations": ["string"],
-  "courtroom_risks": [
+  "case_risks": [
     {{
       "title": "string",
       "description": "string",
       "severity": "string"
     }}
   ],
-  "final_case_assessment": "string",
-  "generated_report": {{
-    "sections": [
-      {{
-        "title": "string",
-        "content": "string"
-      }}
-    ]
-  }}
-}}"""
+  "final_assessment": "string",
+  "recommendations": ["string"],
+  "final_score": "string"
+}}
+"""
 )
 
-async def generate_final_legal_report(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any], agent2_strategy: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_final_legal_report(workspace_meta: Dict[str, Any], rag_context: str = "") -> Dict[str, Any]:
     """
-    Agent 3 Final Report Synthesis using Gemini.
-    Consumes outputs from Agents 0, 1, and 2 to compile the consolidated legal report.
+    Agent 3 Unified Final Report Generation using Gemini.
+    Consumes Agent 0 structured context and RAG statutory inputs to perform the full reasoning.
     """
     if IS_MOCK_GEMINI:
-        logger.info("Generating dynamic mock Agent 3 final report...")
-        return generate_mock_agent3_report(workspace_meta, agent1_analysis, agent2_strategy)
+        logger.info("Generating dynamic mock Agent 3 unified final report...")
+        return generate_mock_agent3_report(workspace_meta)
 
-    lawyer_side = workspace_meta.get("lawyer_side", "Plaintiff")
+    lawyer_side = workspace_meta.get("legal_context", {}).get("lawyer_side", "Plaintiff")
     prefix = get_lawyer_side_prefix(lawyer_side)
 
     prompt = FINAL_REPORT_PROMPT.format(
         lawyer_side_prefix=prefix,
+        lawyer_side=lawyer_side,
         case_context=json.dumps(workspace_meta, cls=MongoJSONEncoder, indent=2),
-        agent1_analysis=json.dumps(agent1_analysis, cls=MongoJSONEncoder, indent=2),
-        agent2_strategy=json.dumps(agent2_strategy, cls=MongoJSONEncoder, indent=2)
+        rag_context=rag_context or "No statutory document matched in local vector index."
     )
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        data = json.loads(response.text)
-        return data
+        return validate_and_parse_json(response.text, Agent3Output)
     except Exception as e:
-        logger.error(f"Gemini Agent 3 report generation failure: {e}. Falling back to dynamic mock engine.")
-        return generate_mock_agent3_report(workspace_meta, agent1_analysis, agent2_strategy)
+        logger.error(f"Gemini Agent 3 unified report generation failure: {e}. Falling back to dynamic mock engine.")
+        return generate_mock_agent3_report(workspace_meta)
 
-
-
-def generate_mock_agent3_report(workspace_meta: Dict[str, Any], agent1_analysis: Dict[str, Any], agent2_strategy: Dict[str, Any]) -> Dict[str, Any]:
+def generate_mock_agent3_report(workspace_meta: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Generates dynamic mock Agent 3 legal report strictly using metadata and prior analyses.
+    Generates dynamic mock Agent 3 report matching the new Agent3Output schema.
     """
-    strongest_ev = agent1_analysis.get("strong_evidence", [])
-    weak_ev = agent1_analysis.get("weak_evidence", [])
-    missing_ev = agent1_analysis.get("missing_evidence", [])
-    loopholes = agent1_analysis.get("loopholes", [])
-    courtroom_risks = agent2_strategy.get("courtroom_risks", [])
-    strategic_recs = agent2_strategy.get("strategic_recommendations", [])
+    claims = workspace_meta.get("claims", [])
+    evidence_rel = workspace_meta.get("evidence_relationships", [])
+    lawyer_side = workspace_meta.get("legal_context", {}).get("lawyer_side", "Plaintiff") if workspace_meta else "Plaintiff"
+    client_name = workspace_meta.get("legal_context", {}).get("client_name", "Client") if workspace_meta else "Client"
+    opposing_party = workspace_meta.get("legal_context", {}).get("opposing_party", "Opponent") if workspace_meta else "Opponent"
     
-    lawyer_side = workspace_meta.get("lawyer_side", "Plaintiff")
-    client_name = workspace_meta.get("client_name") or "Client"
-    opposing_party = workspace_meta.get("opposing_party") or "Opponent"
-    case_type = workspace_meta.get("case_type") or "General Dispute"
+    strong_ev = []
+    if evidence_rel:
+        for idx, er in enumerate(evidence_rel):
+            strong_ev.append({
+                "evidence_id": er.get("evidence_id", f"ev_{idx}"),
+                "file_name": f"Document_{idx}",
+                "supporting_claim": claims[0] if claims else "Primary Claim",
+                "reasoning": f"Grounded document support: {er.get('relationship_description')}"
+            })
+    else:
+        strong_ev.append({
+            "evidence_id": "none",
+            "file_name": "N/A",
+            "supporting_claim": "N/A",
+            "reasoning": "Insufficient supporting evidence available."
+        })
 
-    case_strength = "Moderate Case" if strongest_ev else "Weak Case"
+    evidence_analysis = {
+        "strong_evidence": strong_ev,
+        "moderate_evidence": [],
+        "weak_evidence": [],
+        "unsupported_claims": [],
+        "missing_evidence": [
+            {
+                "category": "Verification Records",
+                "description": "Additional transactional verification logs.",
+                "impact": "High"
+            }
+        ],
+        "loopholes": [
+            {
+                "title": "Verification Gap",
+                "description": "Electronic records require validation of original signatures.",
+                "severity": "Medium"
+            }
+        ],
+        "contradictions": [],
+        "confidence_scores": [
+            {
+                "claim": c,
+                "confidence_score": 85 if evidence_rel else 15
+            } for c in claims
+        ]
+    }
 
-    executive_summary = f"This consolidated legal intelligence report details the {case_type} between {client_name} (represented as {lawyer_side}) and {opposing_party}. Strategic arguments are anchored on {len(strongest_ev)} strong evidence items. Overall case readiness is classified as {case_strength}."
-
-    legal_references = [
+    lawyer_args = [
         {
-            "act_or_statute": "Standard Procedure and Rules of Evidence",
-            "section": "General Burden of Proof",
-            "relevance": "Governs the evidentiary requirements to prove the assertions made in the case."
+            "argument": f"Establishment of elements under {claims[0] if claims else 'dispute'}.",
+            "strength": "Strongest",
+            "claim_id": "claim_0",
+            "evidence_support": [strong_ev[0]["evidence_id"]]
         }
     ]
 
-    final_case_assessment = f"Based on prior analysis, {client_name} holds a {case_strength.lower()} claim. Counsel must actively address the vulnerabilities and missing evidence identified in the audit."
+    opponent_args = [
+        {
+            "attack_vector": "Completeness of transaction records",
+            "explanation": "Opponent will challenge the compliance timelines.",
+            "rebuttal_strategy": "Present contemporaneous email timeline.",
+            "evidence_targeted": [strong_ev[0]["evidence_id"]]
+        }
+    ]
 
-    sections = [
+    legal_sections = [
         {
-          "title": "Summary",
-          "content": executive_summary
-        },
-        {
-          "title": "Strong Points",
-          "content": f"Found {len(strongest_ev)} strong evidence items supporting our claims." if strongest_ev else "Insufficient supporting evidence available."
-        },
-        {
-          "title": "Weak Points",
-          "content": f"Found {len(weak_ev)} weak or unsupported claims." if weak_ev else "No weak points identified in the available documents."
-        },
-        {
-          "title": "Missing Proof",
-          "content": "; ".join([f"{item.get('category')}: {item.get('description')}" for item in missing_ev]) if missing_ev else "Insufficient supporting evidence available. Missing primary validation documents."
-        },
-        {
-          "title": "Possible Opponent Attack",
-          "content": "; ".join([f"{item.get('title')}: {item.get('description')}" for item in courtroom_risks]) if courtroom_risks else "No critical counterargument risks identified."
-        },
-        {
-          "title": "Recommended Action",
-          "content": "; ".join(strategic_recs) if strategic_recs else "Maintain standard procedural compliance and address evidentiary gaps."
+            "act_or_statute": "Indian Penal Code" if lawyer_side.lower() == "prosecution" else "Uniform Commercial Code",
+            "section": "Section 420" if lawyer_side.lower() == "prosecution" else "Section 2-201",
+            "relevance": "Governs the transaction requirements.",
+            "simple_explanation": "Requires clear written proof of obligations.",
+            "burden_of_proof": "Preponderance of evidence is on the claimant.",
+            "compliance_gap": "Timeline details must be validated."
         }
     ]
 
     return {
-        "executive_summary": executive_summary,
-        "case_strength": case_strength,
-        "strongest_evidence": strongest_ev,
-        "weak_evidence": weak_ev,
-        "missing_evidence": missing_ev,
-        "loopholes": loopholes,
-        "legal_references": legal_references,
-        "strategic_recommendations": strategic_recs,
-        "courtroom_risks": courtroom_risks,
-        "final_case_assessment": final_case_assessment,
-        "generated_report": {
-            "sections": sections
-        }
+        "evidence_analysis": evidence_analysis,
+        "legal_arguments": {
+            "lawyer_side": lawyer_args,
+            "opponent_side": opponent_args
+        },
+        "legal_sections": legal_sections,
+        "case_risks": [
+            {
+                "title": "Factual Contestation Risk",
+                "description": "Opposing party may present conflicting narrative.",
+                "severity": "Medium"
+            }
+        ],
+        "final_assessment": f"This synthesized legal audit details the case between {client_name} and {opposing_party}. The client {client_name} holds a moderate claim. Statutory applicability is grounded in standard commercial code provisions.",
+        "recommendations": [
+            "Review original electronic metadata.",
+            "Consolidate timeline witnesses."
+        ],
+        "final_score": "75%"
     }
+
+
+CHAT_PROMPT = PromptTemplate(
+    input_variables=["lawyer_side_prefix", "case_summary", "claims", "agent3_report", "rag_context", "chat_history", "question"],
+    template="""{lawyer_side_prefix}
+You are a case-aware AI legal assistant for VerdictIQ.
+Your goal is to answer follow-up questions from the lawyer about the active legal case workspace.
+You must ground your answers strictly on the structured case context (Agent 0) and the full legal intelligence report (Agent 3) provided below.
+Do NOT rerun any agent pipeline or call external systems.
+
+Case Intake Context (Agent 0):
+- Case Summary: {case_summary}
+- Claims: {claims}
+
+Full Legal Intelligence Report (Agent 3):
+{agent3_report}
+
+Retrieved Document Context (RAG):
+{rag_context}
+
+Conversation History:
+{chat_history}
+
+Lawyer's Question:
+{question}
+
+STRICT BEHAVIOR RULES:
+1. Answer the lawyer's question directly, concisely, and clearly. Explain your reasoning.
+2. Ground your reasoning strictly in the provided evidence and case data. Do NOT invent/fabricate facts, documents, dates, or witnesses.
+3. If the provided context does not contain enough information to answer, state:
+   "The available case materials do not provide enough information to answer this question."
+4. Never hallucinate legal sections. If unsure, say "Not enough information to determine exact section."
+5. Always respect the lawyer's side (Defense or Prosecution/Plaintiff).
+6. Reference specific evidence files and legal sections when needed. Keep the tone professional, simple, and helpful.
+
+Return the response strictly as a JSON object matching the following structure:
+{{
+  "answer": "string",
+  "supporting_context": ["string"],
+  "confidence": "string"
+}}"""
+)
+
+async def run_chat_agent(
+    case_summary: str,
+    claims: List[str],
+    evidence_audit: Dict[str, Any],
+    courtroom_strategy: Dict[str, Any],
+    final_report: Dict[str, Any],
+    rag_context: str,
+    chat_history: str,
+    question: str,
+    lawyer_side: str = None
+) -> Dict[str, Any]:
+    """
+    Unified conversational chatbot execution function using Gemini API.
+    Uses Agent 0 + Agent 3 reports only.
+    """
+    if IS_MOCK_GEMINI:
+        logger.info("Generating dynamic mock Agent 3 chatbot response...")
+        return generate_mock_chat_agent(question, lawyer_side)
+
+    prefix = get_lawyer_side_prefix(lawyer_side)
+    
+    # Clean up final report fields for token efficiency
+    clean_report = {
+        "executive_summary": final_report.get("executive_summary", ""),
+        "case_strength": final_report.get("case_strength", ""),
+        "case_strength_score": final_report.get("case_strength_score", 50),
+        "strongest_evidence": final_report.get("strongest_evidence", []),
+        "weak_evidence": final_report.get("weak_evidence", []),
+        "missing_evidence": final_report.get("missing_evidence", []),
+        "loopholes": final_report.get("loopholes", []),
+        "legal_references": final_report.get("legal_references", []),
+        "courtroom_risks": final_report.get("courtroom_risks", []),
+        "final_case_assessment": final_report.get("final_case_assessment", ""),
+        "recommendations": final_report.get("strategic_recommendations", [])
+    }
+
+    prompt = CHAT_PROMPT.format(
+        lawyer_side_prefix=prefix,
+        case_summary=case_summary,
+        claims=json.dumps(claims, cls=MongoJSONEncoder),
+        agent3_report=json.dumps(clean_report, cls=MongoJSONEncoder, indent=2),
+        rag_context=rag_context or "No context retrieved.",
+        chat_history=chat_history or "No previous history.",
+        question=question
+    )
+
+    logger.info(f"Gemini Chat: Running request for question length: {len(question)}. Prompt size: {len(prompt)} chars.")
+    try:
+        model = genai.GenerativeModel("gemini-3.5-flash")
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        logger.info(f"Gemini Chat: Received response of length: {len(response.text)}.")
+        return validate_and_parse_json(response.text, Agent4Output)
+    except Exception as e:
+        logger.error(f"Gemini Chat API call failed: {e}. Falling back to dynamic mock chat assistant.")
+        return generate_mock_chat_agent(question, lawyer_side)
+
+def generate_mock_chat_agent(question: str, lawyer_side: str = None) -> Dict[str, Any]:
+    """
+    Fallback mock response for conversational chatbot.
+    """
+    side = lawyer_side or "Plaintiff"
+    return {
+        "answer": f"[Agent 3 Chatbot Assistant] Case-aware assistant response assisting the {side} side regarding: '{question}'. All evidence audit and strategy details remain active.",
+        "supporting_context": ["Case Intake Context", "Agent 3 Consolidated Intelligence"],
+        "confidence": "High (Grounded in unified report context)"
+    }
+
+

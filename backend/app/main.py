@@ -16,7 +16,7 @@ from app.routes.agent0_routes import router as agent0_router
 from app.routes.agent1_routes import router as agent1_router
 from app.routes.agent2_routes import router as agent2_router
 from app.routes.agent3_routes import router as agent3_router
-from app.routes.chat_routes import router as chat_router
+from app.routes.chat_routes import router as chat_router, debug_router as debug_router
 from app.routes.export_routes import router as export_router
 from app.routes.analysis_routes import router as analysis_router
 
@@ -100,6 +100,7 @@ app.include_router(agent1_router)
 app.include_router(agent2_router)
 app.include_router(agent3_router)
 app.include_router(chat_router)
+app.include_router(debug_router)
 app.include_router(export_router)
 app.include_router(analysis_router)
 

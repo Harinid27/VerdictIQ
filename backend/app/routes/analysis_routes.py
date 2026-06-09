@@ -50,15 +50,11 @@ async def run_analysis(workspace_id: str, current_user: dict = Depends(get_curre
         "stages_completed": [
             "load_workspace_node", 
             "agent0_node", 
-            "agent1_node", 
-            "agent2_node", 
             "agent3_node", 
             "save_results_node"
         ],
         "results": {
             "agent0_output": final_state.get("agent0_output"),
-            "agent1_output": final_state.get("agent1_output"),
-            "agent2_output": final_state.get("agent2_output"),
             "agent3_output": final_state.get("agent3_output")
         }
     }
