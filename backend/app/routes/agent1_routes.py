@@ -29,10 +29,10 @@ async def analyze_workspace_evidence(workspace_id: str, current_user: dict = Dep
     scc_collection = get_collection("structured_case_context")
     context_doc = await scc_collection.find_one({"workspace_id": workspace_id})
     if not context_doc:
-        return {
-            "success": False,
-            "message": "Structured context unavailable"
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Structured case context unavailable. Please run Agent 0 intake compilation first."
+        )
 
     # Fetch workspaces meta details to get lawyer_side
     workspace_meta = await get_collection("workspaces").find_one({"workspace_id": workspace_id})
@@ -113,12 +113,6 @@ async def analyze_workspace_evidence(workspace_id: str, current_user: dict = Dep
         "evidence_relationships": agent1_doc.get("evidence_relationships", []),
         "prepared_for_agent2": True,
         "prepared_for_agent3": True
-    }
-
-    return {
-        "success": True,
-        "message": "Agent 1 analysis completed",
-        "analysis": response_analysis
     }
 
     return {

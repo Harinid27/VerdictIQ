@@ -23,16 +23,13 @@ def serialize_mongo_doc(doc) -> dict:
 async def generate_report(workspace_id: str, current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
 
-    # Check if Agent 3 report is already saved
+    # Always regenerate report fresh on every POST call (ensures new evidence is included)
+    logger.info(f"Agent 3 Route: Regenerating report for workspace: {workspace_id}")
+    from app.routes.agent1_routes import analyze_workspace_evidence
+    await analyze_workspace_evidence(workspace_id, current_user)
+
     agent3_collection = get_collection("agent3_final_reports")
     agent3_doc = await agent3_collection.find_one({"workspace_id": workspace_id})
-
-    if not agent3_doc:
-        # Fallback to trigger unified Agent 3 engine
-        logger.info(f"Agent 3 Route: Report not found. Triggering Agent 3 reasoning engine for workspace: {workspace_id}")
-        from app.routes.agent1_routes import analyze_workspace_evidence
-        await analyze_workspace_evidence(workspace_id, current_user)
-        agent3_doc = await agent3_collection.find_one({"workspace_id": workspace_id})
 
     if not agent3_doc:
         raise HTTPException(

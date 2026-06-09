@@ -198,9 +198,9 @@ class Agent3Output(BaseModel):
     final_score: str = Field(..., description="Final case assessment score (0-100 or favorability rating, e.g. '85%')")
 
 
-# --- AGENT 4 SCHEMAS (DEPRECATED but kept for structural compatibility) ---
 class Agent4Output(BaseModel):
     answer: str = Field(..., description="Conversational answer to the lawyer's question, grounded strictly in the provided case data")
     supporting_context: List[str] = Field(..., description="Fact snippets, evidence files, or legal citations supporting the answer")
     confidence: str = Field(..., description="Confidence level: High, Medium, or Low, explaining any missing gaps")
+    agent_name: str = Field(..., description="Name of the agent answering: Agent 0 Case Intake Agent, Agent 1 Evidentiary Auditing Agent, Agent 2 Courtroom Strategy Agent, or Agent 3 Synthesis Report Agent")
 

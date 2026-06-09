@@ -87,10 +87,30 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
 
     document_analyses = []
     
-    # 3. For each evidence file, fetch/extract text and run single-doc analysis
+    # 3. Fetch ALL evidence files from BOTH collections on every run (union by file_id)
+    # This ensures newly added evidence (in 'evidence' collection) is always picked up
     document_extractions_collection = get_collection("document_extractions")
-    
+    evidence_collection_docs = get_collection("evidence")
+
+    # Merge evidence_files and evidence docs (avoid duplicates by _id)
+    seen_ids = set()
+    all_evidence = []
     for ef in evidence_files:
+        seen_ids.add(str(ef["_id"]))
+        all_evidence.append(ef)
+
+    # Also pull from the 'evidence' collection (where /api/files/upload saves)
+    ev_cursor = evidence_collection_docs.find({"workspace_id": workspace_id})
+    ev_docs = await ev_cursor.to_list(length=100)
+    for ev in ev_docs:
+        eid = str(ev["_id"])
+        if eid not in seen_ids:
+            seen_ids.add(eid)
+            all_evidence.append(ev)
+
+    logger.info(f"Agent 0: Processing {len(all_evidence)} total evidence files for workspace {workspace_id}")
+
+    for ef in all_evidence:
         file_id = str(ef["_id"])
         file_name = ef.get("file_name")
         file_url = ef.get("file_url")
@@ -98,37 +118,33 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
         description = ef.get("description", "")
         importance_level = ef.get("importance_level", "Important")
 
-        # Check if already processed
-        doc_ext = await document_extractions_collection.find_one({
-            "workspace_id": workspace_id,
-            "file_id": file_id
-        })
-        
-        extracted_text = ""
-        if doc_ext:
-            extracted_text = doc_ext.get("raw_text", "")
+        # ALWAYS prefer text already extracted at upload time (stored directly in the evidence doc)
+        extracted_text = ef.get("extracted_text", "")
 
         if not extracted_text:
-            # Attempt to find pre-extracted text from the legacy evidence collection
-            legacy_doc = await get_collection("evidence").find_one({"_id": ef["_id"]})
-            if legacy_doc and legacy_doc.get("extracted_text"):
-                extracted_text = legacy_doc.get("extracted_text")
-            else:
-                # Retrieve from URL or default fallback text
-                try:
-                    if file_url and not file_url.startswith("https://res.cloudinary.com/verdictiq/image/upload/mock_"):
-                        res = requests.get(file_url, timeout=10)
-                        if res.status_code == 200:
-                            # Re-run text extraction from downloaded stream
-                            from app.utils.text_extractor import extract_text_from_file
-                            extracted_text = extract_text_from_file(res.content, file_name, res.headers.get("content-type", ""))
-                except Exception as ex:
-                    logger.error(f"Failed to fetch content from URL: {file_url}. Exception: {ex}")
+            # Try previous run cache from document_extractions
+            doc_ext = await document_extractions_collection.find_one({
+                "workspace_id": workspace_id,
+                "file_id": file_id
+            })
+            if doc_ext:
+                extracted_text = doc_ext.get("raw_text", "")
 
-            if not extracted_text:
-                extracted_text = f"[Evidence document content for file {file_name}. Description provided: {description}]"
+        if not extracted_text:
+            # Last resort: download from Cloudinary URL
+            try:
+                if file_url and not file_url.startswith("https://res.cloudinary.com/verdictiq/image/upload/mock_"):
+                    res = requests.get(file_url, timeout=10)
+                    if res.status_code == 200:
+                        from app.utils.text_extractor import extract_text_from_file
+                        extracted_text = extract_text_from_file(res.content, file_name, res.headers.get("content-type", ""))
+            except Exception as ex:
+                logger.error(f"Failed to fetch content from URL: {file_url}. Exception: {ex}")
 
-        # Call Gemini to analyze single document text
+        if not extracted_text:
+            extracted_text = f"[Evidence document content for file {file_name}. Description provided: {description}]"
+
+        # Call Gemini to analyze single document text (always re-run on each analysis pass)
         try:
             analysis = await analyze_document_text(
                 text=extracted_text, 
@@ -144,7 +160,7 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
                 "ai_summary": f"Failed to run Gemini analysis for {file_name}."
             }
 
-        # Store in document_extractions
+        # Store/update in document_extractions
         extraction_doc = {
             "workspace_id": workspace_id,
             "file_id": file_id,
@@ -153,7 +169,6 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
             "extracted_dates": analysis.get("extracted_dates", []),
             "ai_summary": analysis.get("ai_summary", "")
         }
-        
         await document_extractions_collection.update_one(
             {"workspace_id": workspace_id, "file_id": file_id},
             {"$set": extraction_doc},

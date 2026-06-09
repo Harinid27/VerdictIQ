@@ -35,12 +35,50 @@ logger = logging.getLogger(__name__)
 # Initialize Gemini SDK
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 IS_MOCK_GEMINI = not GEMINI_API_KEY or GEMINI_API_KEY == "placeholder_key"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 if GEMINI_API_KEY and not IS_MOCK_GEMINI:
     logger.info("Initializing Google Generative AI SDK with GEMINI_API_KEY...")
     genai.configure(api_key=GEMINI_API_KEY)
 else:
     logger.warning("GEMINI_API_KEY not configured or is placeholder. Using mock Gemini engine.")
+
+def generate_content_with_fallback(prompt: str, generation_config: dict = None) -> Any:
+    """
+    Tries to generate content using a prioritized list of Gemini models
+    to handle 429 quota exhaustion errors gracefully by falling back to other models,
+    with short sleep retries for transient RPM limits.
+    """
+    import time
+    
+    models = [GEMINI_MODEL]
+    for m in ["gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"]:
+        if m not in models:
+            models.append(m)
+            
+    last_error = None
+    for model_name in models:
+        for attempt in range(2):
+            try:
+                logger.info(f"Model Fallback: Attempting generation with model: {model_name} (attempt {attempt+1})")
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt, generation_config=generation_config)
+                if response and response.text:
+                    logger.info(f"Model Fallback: Successfully generated content using: {model_name}")
+                    return response
+            except Exception as e:
+                last_error = e
+                if "429" in str(e):
+                    sleep_time = 2.0 * (attempt + 1)
+                    logger.warning(f"Model Fallback: Model {model_name} hit 429. Sleeping {sleep_time}s...")
+                    time.sleep(sleep_time)
+                else:
+                    logger.warning(f"Model Fallback: Model {model_name} failed: {e}")
+                    break
+            
+    if last_error:
+        raise last_error
+    raise Exception("All candidate Gemini models failed to generate content.")
 
 def get_lawyer_side_prefix(lawyer_side: str) -> str:
     if not lawyer_side:
@@ -218,8 +256,7 @@ async def analyze_document_text(text: str, filename: str, doc_description: str, 
     )
 
     try:
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        response = model.generate_content(
+        response = generate_content_with_fallback(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
@@ -268,8 +305,7 @@ async def generate_structured_case_context(workspace_meta: Dict[str, Any], docum
     )
 
     try:
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        response = model.generate_content(
+        response = generate_content_with_fallback(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
@@ -582,8 +618,7 @@ async def analyze_case_evidence_and_risks(structured_context: Dict[str, Any], la
     )
 
     try:
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        response = model.generate_content(
+        response = generate_content_with_fallback(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
@@ -849,8 +884,7 @@ async def generate_courtroom_strategy(workspace_meta: Dict[str, Any], agent1_ana
     )
 
     try:
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        response = model.generate_content(
+        response = generate_content_with_fallback(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
@@ -1146,8 +1180,7 @@ async def generate_final_legal_report(workspace_meta: Dict[str, Any], rag_contex
     )
 
     try:
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        response = model.generate_content(
+        response = generate_content_with_fallback(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
@@ -1296,13 +1329,22 @@ STRICT BEHAVIOR RULES:
 5. Always respect the lawyer's side (Defense or Prosecution/Plaintiff).
 6. Reference specific evidence files and legal sections when needed. Keep the tone professional, simple, and helpful.
 
+Depending on the lawyer's question, speak from the persona of the most relevant agent:
+- Use "Agent 0 Case Intake Agent" if the question is about general case summaries, timeline dates, or key entities.
+- Use "Agent 1 Evidentiary Auditing Agent" if the question is about evidence strength, missing evidence, gaps, or loopholes.
+- Use "Agent 2 Courtroom Strategy Agent" if the question is about arguments, opponent counterarguments, rebuttals, or strategic recommendations.
+- Use "Agent 3 Synthesis Report Agent" if the question is about overall case synthesis or reports.
+
 Return the response strictly as a JSON object matching the following structure:
 {{
   "answer": "string",
   "supporting_context": ["string"],
-  "confidence": "string"
+  "confidence": "string",
+  "agent_name": "string" (must be one of: 'Agent 0 Case Intake Agent', 'Agent 1 Evidentiary Auditing Agent', 'Agent 2 Courtroom Strategy Agent', or 'Agent 3 Synthesis Report Agent')
 }}"""
 )
+
+LEGAL_CHAT_PROMPT = CHAT_PROMPT
 
 async def run_chat_agent(
     case_summary: str,
@@ -1352,8 +1394,7 @@ async def run_chat_agent(
 
     logger.info(f"Gemini Chat: Running request for question length: {len(question)}. Prompt size: {len(prompt)} chars.")
     try:
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        response = model.generate_content(
+        response = generate_content_with_fallback(
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
@@ -1365,13 +1406,25 @@ async def run_chat_agent(
 
 def generate_mock_chat_agent(question: str, lawyer_side: str = None) -> Dict[str, Any]:
     """
-    Fallback mock response for conversational chatbot.
+    Fallback mock response for conversational chatbot with dynamic agent classification.
     """
     side = lawyer_side or "Plaintiff"
+    q_lower = question.lower()
+    
+    if any(k in q_lower for k in ["evidence", "loophole", "missing", "proof", "audit", "contradict"]):
+        agent_name = "Agent 1 Evidentiary Auditing Agent"
+    elif any(k in q_lower for k in ["strategy", "argument", "rebuttal", "risk", "counter", "court"]):
+        agent_name = "Agent 2 Courtroom Strategy Agent"
+    elif any(k in q_lower for k in ["summary", "timeline", "fact", "intake", "entity"]):
+        agent_name = "Agent 0 Case Intake Agent"
+    else:
+        agent_name = "Agent 3 Synthesis Report Agent"
+        
     return {
-        "answer": f"[Agent 3 Chatbot Assistant] Case-aware assistant response assisting the {side} side regarding: '{question}'. All evidence audit and strategy details remain active.",
+        "answer": f"Case-aware assistant response assisting the {side} side regarding: '{question}'. All evidence audit and strategy details remain active.",
         "supporting_context": ["Case Intake Context", "Agent 3 Consolidated Intelligence"],
-        "confidence": "High (Grounded in unified report context)"
+        "confidence": "High (Grounded in unified report context)",
+        "agent_name": agent_name
     }
 
 

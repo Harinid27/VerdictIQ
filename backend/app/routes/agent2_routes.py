@@ -22,17 +22,13 @@ def serialize_mongo_doc(doc) -> dict:
 async def generate_strategy(workspace_id: str, current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
 
-    # 1. Check if Agent 2 strategy is already saved
+    # Always regenerate strategy fresh on every POST call (ensures new evidence is included)
+    logger.info(f"Agent 2 Route: Regenerating strategy for workspace: {workspace_id}")
+    from app.routes.agent1_routes import analyze_workspace_evidence
+    await analyze_workspace_evidence(workspace_id, current_user)
+
     agent2_collection = get_collection("agent2_strategy")
     agent2_doc = await agent2_collection.find_one({"workspace_id": workspace_id})
-
-    if not agent2_doc:
-        # If strategy is not found, fallback to run unified report generation
-        logger.info(f"Agent 2 Route: Strategy not found. Triggering Agent 3 reasoning engine for workspace: {workspace_id}")
-        from app.routes.agent1_routes import analyze_workspace_evidence
-        # Run analyze_workspace_evidence
-        await analyze_workspace_evidence(workspace_id, current_user)
-        agent2_doc = await agent2_collection.find_one({"workspace_id": workspace_id})
         
     if not agent2_doc:
         raise HTTPException(

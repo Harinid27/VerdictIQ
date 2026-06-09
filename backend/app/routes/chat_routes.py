@@ -123,8 +123,9 @@ async def ask_workspace_agent(
             lawyer_side=workspace.get("lawyer_side")
         )
 
-        # Format Agent 3 Chatbot response
-        reply_text = f"[Agent 3 Chatbot Assistant]\n{agent4_res['answer']}"
+        # Format correct Agent Chatbot response
+        agent_name = agent4_res.get("agent_name") or "Agent 3 Synthesis Report Agent"
+        reply_text = f"[{agent_name}]\n{agent4_res['answer']}"
         
         # Save User message
         user_msg_doc = {
@@ -139,7 +140,7 @@ async def ask_workspace_agent(
         agent_msg_doc = {
             "workspace_id": workspace_id,
             "sender": "agent",
-            "agent_name": "Agent 3 Chatbot Assistant",
+            "agent_name": agent_name,
             "text": reply_text,
             "timestamp": datetime.utcnow()
         }
@@ -284,13 +285,12 @@ async def test_chat_diagnostic(
         gemini_response = ""
         parsing_result = {}
         
-        from app.services.gemini_service import IS_MOCK_GEMINI, validate_and_parse_json, Agent4Output
+        from app.services.gemini_service import IS_MOCK_GEMINI, validate_and_parse_json, Agent4Output, GEMINI_MODEL, generate_content_with_fallback
         if IS_MOCK_GEMINI:
             gemini_response = '{"answer": "Mock diagnostic reply", "supporting_context": [], "confidence": "High"}'
             parsing_result = json.loads(gemini_response)
         else:
-            model = genai.GenerativeModel("gemini-3.5-flash")
-            response = model.generate_content(
+            response = generate_content_with_fallback(
                 prompt,
                 generation_config={"response_mime_type": "application/json"}
             )
