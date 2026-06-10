@@ -1,6 +1,8 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query, status, HTTPException
 from typing import List, Optional
 from app.middleware.auth_middleware import get_current_user
+from app.database import get_collection
 from app.schemas.hearing_schema import HearingCreate, HearingUpdate, HearingResponse, HearingAPIResponse, HearingListAPIResponse
 from app.schemas.calendar_schema import CalendarAPIResponse, MergedCalendarEvent
 from app.schemas.task_schema import TaskResponse, TaskListAPIResponse
@@ -20,6 +22,11 @@ from app.services.calendar_service import (
     delete_case_record
 )
 from app.services.task_service import get_all_tasks
+from app.services.gemini_service import (
+    generate_ai_activity_feed,
+    generate_calendar_recommendations
+)
+
 
 router = APIRouter(tags=["Calendar, Hearings, Cases & Dashboard"])
 
@@ -204,3 +211,71 @@ async def get_dashboard_pending_tasks(current_user: dict = Depends(get_current_u
         success=True,
         data=[TaskResponse(**t) for t in recent_pending]
     )
+
+@router.get("/api/dashboard/ai-activity-feed")
+async def get_ai_activity_feed(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    
+    # Fetch user's cases
+    cases = await get_all_cases(user_id)
+    case_ids = [c["_id"] for c in cases]
+    
+    # Fetch tasks
+    tasks = await get_all_tasks(user_id)
+    
+    # Fetch evidence files
+    evidence_files = await get_collection("evidence_files").find({"workspace_id": {"$in": case_ids}}).to_list(length=1000)
+    
+    feed = await generate_ai_activity_feed(cases, tasks, evidence_files)
+    return {
+        "success": True,
+        "data": feed
+    }
+
+@router.get("/api/calendar/recommendations")
+async def get_calendar_recs(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    
+    # Fetch user's cases
+    cases = await get_all_cases(user_id)
+    case_ids = [c["_id"] for c in cases]
+    
+    # Fetch hearings and filter out completed ones (where date/time is in the past)
+    all_hearings = await get_all_hearings(user_id)
+    now = datetime.utcnow()
+    hearings = []
+    for h in all_hearings:
+        h_date = h.get("hearing_date")
+        h_time = h.get("hearing_time") or "00:00"
+        try:
+            h_dt = datetime.strptime(f"{h_date} {h_time}", "%Y-%m-%d %H:%M")
+            if h_dt >= now:
+                hearings.append(h)
+        except Exception:
+            hearings.append(h)
+    
+    # Fetch evidence files
+    evidence_files = await get_collection("evidence_files").find({"workspace_id": {"$in": case_ids}}).to_list(length=1000)
+    
+    recs = await generate_calendar_recommendations(cases, hearings, evidence_files)
+    return {
+        "success": True,
+        "data": recs
+    }
+
+@router.get("/api/debug/db")
+async def debug_db():
+    from app.database import db_instance, DATABASE_NAME, MONGODB_URI
+    collections = await db_instance.db.list_collection_names()
+    counts = {}
+    for col_name in collections:
+        col = db_instance.db[col_name]
+        count = await col.count_documents({})
+        counts[col_name] = count
+    return {
+        "database_name": DATABASE_NAME,
+        "mongodb_uri_masked": MONGODB_URI[:30] + "...",
+        "collections": collections,
+        "document_counts": counts
+    }
+

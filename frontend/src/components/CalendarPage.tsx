@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Calendar as CalendarIcon,
@@ -9,7 +9,8 @@ import {
   Clock,
   Landmark,
   AlertTriangle,
-  CheckSquare,
+  Trash2,
+  Loader,
 } from 'lucide-react';
 
 interface Hearing {
@@ -34,11 +35,47 @@ interface CalendarPageProps {
   hearings: Hearing[];
   tasks: Task[];
   onCreateHearing: () => void;
+  onDeleteHearing?: (id: string) => void;
+  onToggleTaskComplete?: (id: string) => void;
+  jumpToDate?: string | null; // ISO date string to auto-navigate calendar to
 }
 
-export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = [], onCreateHearing }) => {
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 5, 1)); // June 2026 as per local time
-  const [selectedDay, setSelectedDay] = useState<number | null>(3); // Default June 3rd (User's current day)
+export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = [], onCreateHearing, onDeleteHearing, onToggleTaskComplete, jumpToDate }) => {
+  const today = new Date();
+  const [currentDate, setCurrentDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState<number | null>(today.getDate());
+
+  // Auto-navigate to a specific date when jumpToDate changes (e.g. after adding a hearing)
+  useEffect(() => {
+    if (!jumpToDate) return;
+    const target = new Date(jumpToDate);
+    if (isNaN(target.getTime())) return;
+    setCurrentDate(new Date(target.getFullYear(), target.getMonth(), 1));
+    setSelectedDay(target.getDate());
+  }, [jumpToDate]);
+
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [loadingRecs, setLoadingRecs] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem('verdictiq_token');
+    if (!token) return;
+    setLoadingRecs(true);
+    fetch('http://localhost:8000/api/calendar/recommendations', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setRecommendations(data.data);
+        }
+        setLoadingRecs(false);
+      })
+      .catch((err) => {
+        console.error("Error fetching recommendations:", err);
+        setLoadingRecs(false);
+      });
+  }, [hearings]);
 
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -62,6 +99,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
     setCurrentDate(new Date(year, month + 1, 1));
     setSelectedDay(null);
   };
+
 
   // Helper to extract hearings for a specific day in this month
   const getHearingsForDay = (day: number) => {
@@ -90,6 +128,20 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
     });
   };
 
+  const isDatePassed = (dateStr: string) => {
+    if (!dateStr) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const eventDate = new Date(dateStr);
+    eventDate.setHours(0, 0, 0, 0);
+    return eventDate < today;
+  };
+
+  const isHearingPassed = (dateStr: string) => {
+    if (!dateStr) return false;
+    return new Date(dateStr) < new Date();
+  };
+
   // Build cells
   const calendarCells = [];
   // Empty slots for padding
@@ -101,7 +153,8 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
     const dayHearings = getHearingsForDay(d);
     const dayTasks = getTasksForDay(d);
     const isSelected = selectedDay === d;
-    const isToday = d === 3 && month === 5 && year === 2026; // June 3, 2026
+    const todayObj = new Date();
+    const isToday = d === todayObj.getDate() && month === todayObj.getMonth() && year === todayObj.getFullYear();
     const hasEvents = dayHearings.length > 0 || dayTasks.length > 0;
 
     calendarCells.push(
@@ -135,32 +188,40 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
 
         {/* Short event summaries inside cells */}
         <div className="space-y-1 overflow-hidden max-h-11">
-          {dayHearings.slice(0, 1).map((h) => (
-            <div
-              key={h.id}
-              className={`text-[8px] truncate px-1 rounded font-bold uppercase tracking-wide border ${
-                h.priority === 'High'
-                  ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                  : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-              }`}
-            >
-              H: {h.caseName}
-            </div>
-          ))}
-          {dayTasks.slice(0, 1).map((t) => (
-            <div
-              key={t.id}
-              className={`text-[8px] truncate px-1 rounded font-bold uppercase tracking-wide border ${
-                t.completed
-                  ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60 line-through decoration-zinc-500/60'
-                  : t.priority === 'High'
-                  ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                  : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
-              }`}
-            >
-              T: {t.title}
-            </div>
-          ))}
+          {dayHearings.slice(0, 1).map((h) => {
+            const isPassed = isHearingPassed(h.date);
+            return (
+              <div
+                key={h.id}
+                className={`text-[8px] truncate px-1 rounded font-bold uppercase tracking-wide border ${
+                  isPassed
+                    ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60 line-through decoration-zinc-500/60 opacity-50'
+                    : h.priority === 'High'
+                    ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                    : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                }`}
+              >
+                H: {h.caseName}
+              </div>
+            );
+          })}
+          {dayTasks.slice(0, 1).map((t) => {
+            const isPassed = isDatePassed(t.dueDate);
+            return (
+              <div
+                key={t.id}
+                className={`text-[8px] truncate px-1 rounded font-bold uppercase tracking-wide border ${
+                  t.completed || isPassed
+                    ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60 line-through decoration-zinc-500/60 opacity-50'
+                    : t.priority === 'High'
+                    ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                    : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
+                }`}
+              >
+                T: {t.title}
+              </div>
+            );
+          })}
           {dayHearings.length + dayTasks.length > 2 && (
             <div className="text-[7px] text-brand-textMuted/50 font-mono tracking-wider text-right uppercase">
               + {dayHearings.length + dayTasks.length - 2} more
@@ -171,9 +232,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
     );
   }
 
-  // Selected Day Details
-  const selectedDayHearings = selectedDay ? getHearingsForDay(selectedDay) : [];
-  const selectedDayTasks = selectedDay ? getTasksForDay(selectedDay) : [];
+
 
   return (
     <div className="space-y-6">
@@ -210,7 +269,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
               <h3 className="text-sm font-bold uppercase tracking-wider text-white font-display">
                 {monthNames[month]} {year}
               </h3>
-              {month === 5 && year === 2026 && (
+              {month === new Date().getMonth() && year === new Date().getFullYear() && (
                 <span className="px-2 py-0.5 rounded-full bg-brand-purple/10 border border-brand-purple/20 text-[8px] text-brand-purple uppercase tracking-wider font-bold">
                   Active Month
                 </span>
@@ -250,94 +309,174 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
 
         {/* Info / AI Reminders Side Panel */}
         <div className="space-y-6">
-          {/* Selected Day Agenda */}
+          {/* Full Month Agenda */}
           <div className="rounded-2xl bg-brand-dark/30 border border-white/5 p-5 md:p-6 shadow-premium-card">
             <h3 className="text-xs font-bold uppercase tracking-wider text-white font-display border-b border-white/5 pb-2.5 mb-4">
-              Schedule: {selectedDay ? `${monthNames[month]} ${selectedDay}, ${year}` : 'Select a Day'}
+              Schedule: {monthNames[month]} {year}
             </h3>
 
-            {selectedDayHearings.length === 0 && selectedDayTasks.length === 0 ? (
-              <div className="text-center py-8">
-                <Clock className="w-7 h-7 text-brand-textMuted/30 mx-auto mb-2" />
-                <p className="text-[11px] text-brand-textMuted/50">
-                  No hearings or deadlines scheduled.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Render Hearings */}
-                {selectedDayHearings.map((h) => {
-                  const formattedTime = new Date(h.date).toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
+            {(() => {
+              // Collect ALL hearings + tasks for this month and sort by date
+              const monthHearings = hearings
+                .filter((h) => {
+                  if (!h.date) return false;
+                  const datePart = h.date.split('T')[0];
+                  const parts = datePart.split('-');
+                  if (parts.length !== 3) return false;
+                  return parseInt(parts[0], 10) === year && parseInt(parts[1], 10) - 1 === month;
+                })
+                .map((h) => ({ ...h, _type: 'hearing' as const, _sortDate: h.date }));
 
-                  return (
-                    <div
-                      key={h.id}
-                      className="group p-3 rounded-xl border border-white/5 bg-brand-dark/20 flex flex-col gap-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white group-hover:text-brand-blue transition-colors duration-200 flex items-center gap-1.5">
-                          <Landmark className="w-3.5 h-3.5 text-brand-blue shrink-0" />
-                          Hearing: {h.caseName}
-                        </span>
-                        <span
-                          className={`text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
-                            h.priority === 'High'
-                              ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                              : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+              const monthTasks = tasks
+                .filter((t) => {
+                  if (!t.dueDate) return false;
+                  const parts = t.dueDate.split('-');
+                  if (parts.length !== 3) return false;
+                  return parseInt(parts[0], 10) === year && parseInt(parts[1], 10) - 1 === month;
+                })
+                .map((t) => ({ ...t, _type: 'task' as const, _sortDate: t.dueDate }));
+
+              const allEvents = [...monthHearings, ...monthTasks].sort((a, b) =>
+                a._sortDate.localeCompare(b._sortDate)
+              );
+
+              if (allEvents.length === 0) {
+                return (
+                  <div className="text-center py-8">
+                    <Clock className="w-7 h-7 text-brand-textMuted/30 mx-auto mb-2" />
+                    <p className="text-[11px] text-brand-textMuted/50">
+                      No hearings or deadlines in {monthNames[month]}.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1 scrollbar-thin">
+                  {allEvents.map((event) => {
+                    if (event._type === 'hearing') {
+                      const h = event as typeof monthHearings[0];
+                      const isPassed = isHearingPassed(h.date);
+                      const eventDate = new Date(h.date);
+                      const dateLabel = eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      const timeLabel = eventDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                      const isSelectedDate = selectedDay !== null && (() => {
+                        const datePart = h.date.split('T')[0];
+                        const parts = datePart.split('-');
+                        return parseInt(parts[2], 10) === selectedDay;
+                      })();
+
+                      return (
+                        <div
+                          key={`h-${h.id}`}
+                          className={`group p-3 rounded-xl border transition-all duration-300 flex flex-col gap-1.5 ${
+                            isPassed
+                              ? 'opacity-40 bg-zinc-900/40 border-zinc-800'
+                              : isSelectedDate
+                              ? 'border-amber-500/30 bg-amber-500/[0.03]'
+                              : 'border-white/5 bg-brand-dark/20 hover:border-amber-500/20'
                           }`}
                         >
-                          {h.priority} Priority
-                        </span>
-                      </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-xs font-bold flex items-center gap-1.5 min-w-0 ${isPassed ? 'text-zinc-500 line-through' : 'text-white'}`}>
+                              <Landmark className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <span className="truncate">{h.caseName}</span>
+                            </span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                                isPassed
+                                  ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500'
+                                  : h.priority === 'High'
+                                  ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                                  : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                              }`}>
+                                {h.priority}
+                              </span>
+                              {onDeleteHearing && (
+                                <button
+                                  onClick={() => onDeleteHearing(h.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-1 rounded bg-red-500/10 hover:bg-red-500 hover:text-white border border-red-500/20 text-red-400 cursor-pointer transition-all duration-300"
+                                  title="Delete Hearing"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <div className={`flex items-center gap-3 text-[10px] font-mono ${isPassed ? 'text-zinc-600' : 'text-amber-400/80'}`}>
+                            <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{dateLabel} · {timeLabel}</span>
+                          </div>
+                          <div className={`text-[10px] ${isPassed ? 'text-zinc-650' : 'text-brand-textMuted/60'}`}>
+                            Court: {h.court}
+                          </div>
+                        </div>
+                      );
+                    } else {
+                      const t = event as typeof monthTasks[0];
+                      const isPassed = isDatePassed(t.dueDate);
+                      const dateLabel = new Date(t.dueDate + 'T00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      const isSelectedDate = selectedDay !== null && (() => {
+                        const parts = t.dueDate.split('-');
+                        return parseInt(parts[2], 10) === selectedDay;
+                      })();
 
-                      <div className="flex items-center gap-1 text-[10px] text-amber-400 font-mono">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>{formattedTime}</span>
-                      </div>
-
-                      <div className="flex items-start gap-1.5 text-[10px] text-brand-textMuted/65">
-                        <span>Court: {h.court}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Render Tasks */}
-                {selectedDayTasks.map((t) => {
-                  return (
-                    <div
-                      key={t.id}
-                      className={`group p-3 rounded-xl border border-white/5 bg-brand-dark/20 flex flex-col gap-2 transition-all duration-300 ${t.completed ? 'opacity-55 bg-white/[0.01]' : ''}`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className={`text-xs font-bold text-white group-hover:text-brand-blue transition-colors duration-200 flex items-center gap-1.5 ${t.completed ? 'line-through text-zinc-500/60 decoration-zinc-500/60' : ''}`}>
-                          <CheckSquare className={`w-3.5 h-3.5 shrink-0 ${t.completed ? 'text-zinc-500/60' : 'text-brand-purple'}`} />
-                          Task: {t.title}
-                        </span>
-                        <span
-                          className={`text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
+                      return (
+                        <div
+                          key={`t-${t.id}`}
+                          onClick={() => onToggleTaskComplete && onToggleTaskComplete(t.id)}
+                          title={onToggleTaskComplete ? (t.completed ? 'Click to mark incomplete' : 'Click to mark complete') : undefined}
+                          className={`group p-3 rounded-xl border flex flex-col gap-1.5 transition-all duration-300 ${
+                            onToggleTaskComplete ? 'cursor-pointer' : ''
+                          } ${
                             t.completed
-                              ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60'
-                              : t.priority === 'High'
-                              ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                              : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
+                              ? 'opacity-55 bg-white/[0.01] border-white/5'
+                              : isPassed
+                              ? 'opacity-40 bg-zinc-900/40 border-zinc-800'
+                              : isSelectedDate
+                              ? 'border-brand-purple/30 bg-brand-purple/[0.03] hover:border-brand-purple/40'
+                              : 'border-white/5 bg-brand-dark/20 hover:border-brand-purple/25 hover:bg-brand-dark/35'
                           }`}
                         >
-                          {t.completed ? 'Completed' : `${t.priority} Priority`}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-1 text-[10px] text-brand-textMuted/65 font-mono">
-                        <span>Workspace: {t.caseName}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-xs font-bold flex items-center gap-1.5 min-w-0 ${
+                              t.completed ? 'line-through text-zinc-500/60' : isPassed ? 'text-zinc-500' : 'text-white'
+                            }`}>
+                              <span className={`shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-all duration-300 ${
+                                t.completed ? 'bg-brand-purple border-brand-purple text-white' : 'border-white/20 bg-transparent group-hover:border-brand-purple/50'
+                              }`}>
+                                {t.completed && (
+                                  <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={4}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
+                              </span>
+                              <span className="truncate">{t.title}</span>
+                            </span>
+                            <span className={`shrink-0 text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                              t.completed
+                                ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60'
+                                : isPassed
+                                ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500'
+                                : t.priority === 'High'
+                                ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                                : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
+                            }`}>
+                              {t.completed ? 'Done' : t.priority}
+                            </span>
+                          </div>
+                          <div className={`text-[10px] font-mono ${isPassed || t.completed ? 'text-zinc-600' : 'text-brand-textMuted/60'}`}>
+                            Due: {dateLabel} · {t.caseName}
+                            {onToggleTaskComplete && !t.completed && !isPassed && (
+                              <span className="ml-2 text-brand-purple/40 opacity-0 group-hover:opacity-100 transition-opacity">· click to complete</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* AI Reminders Panel */}
@@ -351,32 +490,42 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ hearings, tasks = []
             </h3>
 
             <div className="space-y-4 text-xs leading-relaxed">
-              <div className="p-3 rounded-xl bg-brand-blue/[0.02] border border-brand-blue/10 flex gap-2.5">
-                <Brain className="w-4 h-4 text-brand-blue shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold text-white text-[11px] uppercase tracking-wide">
-                    Pre-Trial Prep Alert
-                  </h4>
-                  <p className="text-[10px] text-brand-textMuted mt-1 leading-normal">
-                    AI suggests scheduling a mock cross-examination for **{hearings.length > 0 ? hearings[0].caseName : "your active cases"}** 48 hours prior to the hearing.
-                  </p>
-                  <button className="text-[9px] text-brand-blue hover:underline mt-2 font-bold uppercase tracking-widest bg-transparent border-none p-0 cursor-pointer">
-                    Auto-Schedule Prep
-                  </button>
+              {loadingRecs ? (
+                <div className="flex items-center justify-center py-6 text-brand-textMuted/50 font-mono text-[10px] gap-2">
+                  <Loader className="w-3.5 h-3.5 animate-spin" />
+                  <span>SYNCING RECOMMENDATIONS...</span>
                 </div>
-              </div>
-
-              <div className="p-3 rounded-xl bg-amber-500/[0.02] border border-amber-500/10 flex gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold text-white text-[11px] uppercase tracking-wide">
-                    Evidence Disclosure Gap
-                  </h4>
-                  <p className="text-[10px] text-brand-textMuted mt-1 leading-normal">
-                    Docket deadline for expert witness exchange is **June 15**. Initial expert reports need digital signing.
-                  </p>
-                </div>
-              </div>
+              ) : recommendations.length === 0 ? (
+                <p className="text-[10px] text-brand-textMuted/50 text-center py-4">No AI recommendations available.</p>
+              ) : (
+                recommendations.map((rec, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-3 rounded-xl flex gap-2.5 border ${
+                      rec.type === 'prep'
+                        ? 'bg-brand-blue/[0.02] border-brand-blue/10'
+                        : 'bg-amber-500/[0.02] border-amber-500/10'
+                    }`}
+                  >
+                    {rec.type === 'prep' ? (
+                      <Brain className="w-4 h-4 text-brand-blue shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <h4 className="font-bold text-white text-[11px] uppercase tracking-wide">
+                        {rec.title}
+                      </h4>
+                      <p className="text-[10px] text-brand-textMuted mt-1 leading-normal" dangerouslySetInnerHTML={{ __html: rec.desc }} />
+                      {rec.action && (
+                        <button className="text-[9px] text-brand-blue hover:underline mt-2 font-bold uppercase tracking-widest bg-transparent border-none p-0 cursor-pointer">
+                          {rec.action}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

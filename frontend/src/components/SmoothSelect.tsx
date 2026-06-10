@@ -13,7 +13,6 @@ interface SmoothSelectProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
-  required?: boolean;
 }
 
 export const SmoothSelect: React.FC<SmoothSelectProps> = ({
@@ -22,7 +21,6 @@ export const SmoothSelect: React.FC<SmoothSelectProps> = ({
   onChange,
   placeholder = 'Select an option',
   className = '',
-  required = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);

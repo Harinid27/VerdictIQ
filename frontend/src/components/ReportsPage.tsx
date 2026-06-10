@@ -52,7 +52,17 @@ export const ReportsPage: React.FC<ReportsPageProps> = ({ reports }) => {
           setTimeout(() => {
             setDecryptingId(null);
             setDecryptionStep(0);
-            alert('Document Decrypted. Mock PDF download payload transmitted successfully.');
+            
+            const token = localStorage.getItem('verdictiq_token');
+            const url = `http://localhost:8000/api/export/pdf/${reportId}${token ? `?token=${token}` : ''}`;
+            
+            // Create a temporary link to download
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `verdictiq_report_${reportId}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
           }, 1200);
         }, 1200);
       }, 1000);

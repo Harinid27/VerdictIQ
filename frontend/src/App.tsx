@@ -34,6 +34,7 @@ interface Hearing {
   date: string;
   court: string;
   priority: 'Low' | 'Medium' | 'High';
+  workspaceId?: string;
 }
 
 interface Task {
@@ -78,7 +79,7 @@ function App() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [globalSearch, setGlobalSearch] = useState('');
+  const globalSearch = '';
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
@@ -95,6 +96,9 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+
+  // Tracks the date of the most recently added hearing/task so CalendarPage auto-jumps to it
+  const [calendarJumpDate, setCalendarJumpDate] = useState<string | null>(null);
 
   // Handle Collapsed Sidebar on screen resize
   useEffect(() => {
@@ -162,7 +166,8 @@ function App() {
             caseName: h.case_name,
             date: h.hearing_time ? `${h.hearing_date}T${h.hearing_time}` : h.hearing_date,
             court: h.court_name,
-            priority: h.priority
+            priority: h.priority,
+            workspaceId: h.workspace_id
           })));
         }
       })
@@ -177,6 +182,16 @@ function App() {
         }
       })
       .catch((err) => console.error("Error loading reports from API:", err));
+
+    // Fetch AI Activity Feed Insights
+    fetch('http://localhost:8000/api/dashboard/ai-activity-feed', { headers })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data) {
+          setInsights(data.data);
+        }
+      })
+      .catch((err) => console.error("Error loading AI Activity Feed from API:", err));
   };
 
   // Verify token session on initial app mount
@@ -278,6 +293,9 @@ function App() {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}` }
       })
+        .then(() => {
+          fetchDatabaseData(token);
+        })
         .catch((err) => console.error("Error toggling task status:", err));
     }
   };
@@ -353,6 +371,7 @@ function App() {
               },
               ...prev
             ]);
+            if (token) fetchDatabaseData(token);
           }
         })
         .catch((err) => console.error("Error creating case in database:", err));
@@ -387,9 +406,12 @@ function App() {
               caseName: h.case_name,
               date: h.hearing_time ? `${h.hearing_date}T${h.hearing_time}` : h.hearing_date,
               court: h.court_name,
-              priority: h.priority
+              priority: h.priority,
+              workspaceId: h.workspace_id
             };
             setHearings((prev) => [newHearing, ...prev]);
+            // Auto-jump calendar to new hearing's date
+            setCalendarJumpDate(`${h.hearing_date}T${h.hearing_time || '00:00'}`);
             setInsights((prev) => [
               {
                 id: `insight-${Date.now()}`,
@@ -400,6 +422,7 @@ function App() {
               },
               ...prev
             ]);
+            if (token) fetchDatabaseData(token);
           }
         })
         .catch((err) => console.error("Error scheduling hearing in database:", err));
@@ -434,6 +457,9 @@ function App() {
               priority: t.priority
             };
             setTasks((prev) => [newTask, ...prev]);
+            // Auto-jump calendar to new task's due date
+            if (t.due_date) setCalendarJumpDate(t.due_date);
+            if (token) fetchDatabaseData(token);
           }
         })
         .catch((err) => console.error("Error creating task in database:", err));
@@ -442,6 +468,9 @@ function App() {
 
   const handleDeleteCase = (caseId: string) => {
     setCases(cases.filter((c) => c.id !== caseId));
+    setTasks(tasks.filter((t) => t.caseId !== caseId));
+    setHearings(hearings.filter((h) => h.workspaceId !== caseId));
+    setReports(reports.filter((r) => r.id !== caseId));
 
     const token = localStorage.getItem('verdictiq_token');
     if (token && !caseId.startsWith('case-')) {
@@ -449,7 +478,28 @@ function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
+        .then(() => {
+          // Refetch activity feed after a deletion
+          fetchDatabaseData(token);
+        })
         .catch((err) => console.error("Error deleting case from API:", err));
+    }
+  };
+
+  const handleDeleteHearing = (hearingId: string) => {
+    setHearings(hearings.filter((h) => h.id !== hearingId));
+
+    const token = localStorage.getItem('verdictiq_token');
+    if (token && !hearingId.startsWith('hearing-')) {
+      fetch(`http://localhost:8000/api/hearings/delete/${hearingId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(() => {
+          // Refetch activity feed and calendar recommendations after a deletion
+          fetchDatabaseData(token);
+        })
+        .catch((err) => console.error("Error deleting hearing from API:", err));
     }
   };
 
@@ -462,6 +512,9 @@ function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
+        .then(() => {
+          fetchDatabaseData(token);
+        })
         .catch((err) => console.error("Error deleting task from API:", err));
     }
   };
@@ -608,7 +661,6 @@ function App() {
               </button>
               <div className="flex-1">
                 <Navbar
-                  onSearch={setGlobalSearch}
                   onCreateClick={openCreateModal}
                   onProfileClick={() => setActiveTab('AI Insights')} // Links to profile (mocked inside tab switches/or redirect to settings)
                   userEmail={user.email}
@@ -649,13 +701,13 @@ function App() {
                             setActiveTab('Cases');
                             // Option to focus cases filter
                           }}
+                          onDeleteHearing={handleDeleteHearing}
                         />
                       )}
 
                       {activeTab === 'Cases' && (
                         <CasesPage
                           cases={cases}
-                          onCreateClick={() => openCreateModal('case')}
                           onSelectCase={(id) => {
                             setSelectedCaseId(id);
                           }}
@@ -669,6 +721,9 @@ function App() {
                           hearings={hearings}
                           tasks={tasks}
                           onCreateHearing={() => openCreateModal('hearing')}
+                          onDeleteHearing={handleDeleteHearing}
+                          onToggleTaskComplete={handleToggleTaskComplete}
+                          jumpToDate={calendarJumpDate}
                         />
                       )}
 

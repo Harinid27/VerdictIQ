@@ -5,7 +5,6 @@ import {
   Grid,
   List,
   Search,
-  Plus,
   ArrowUpRight,
   FolderOpen,
   Briefcase,
@@ -26,7 +25,6 @@ interface Case {
 
 interface CasesPageProps {
   cases: Case[];
-  onCreateClick: () => void;
   onSelectCase: (caseId: string) => void;
   onDeleteCase: (caseId: string) => void;
   searchQuery: string;
@@ -34,7 +32,6 @@ interface CasesPageProps {
 
 export const CasesPage: React.FC<CasesPageProps> = ({
   cases,
-  onCreateClick,
   onSelectCase,
   onDeleteCase,
   searchQuery,

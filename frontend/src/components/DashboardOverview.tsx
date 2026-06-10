@@ -12,6 +12,7 @@ import {
   Scale,
   Activity,
   Award,
+  Trash2,
 } from 'lucide-react';
 
 interface Case {
@@ -62,6 +63,7 @@ interface DashboardOverviewProps {
   onViewAllTasks: () => void;
   onViewAllHearings: () => void;
   onQuickAccessCase: (caseId: string) => void;
+  onDeleteHearing?: (id: string) => void;
 }
 
 // Simple CountUp Utility
@@ -99,7 +101,15 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   onViewAllTasks,
   onViewAllHearings,
   onQuickAccessCase,
+  onDeleteHearing,
 }) => {
+  const isHearingCompleted = (dateStr: string) => {
+    if (!dateStr) return false;
+    return new Date(dateStr) < new Date();
+  };
+
+  const upcomingHearings = hearings.filter((h) => !isHearingCompleted(h.date));
+
   const pendingTasksCount = tasks.filter((t) => !t.completed).length;
   const highRiskCasesCount = cases.filter((c) => c.riskLevel === 'High').length;
 
@@ -138,7 +148,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           },
           {
             title: 'Upcoming Hearings',
-            value: hearings.length,
+            value: upcomingHearings.length,
             icon: Calendar,
             glow: 'from-amber-500/10 to-transparent',
             borderColor: 'hover:border-amber-500/20',
@@ -342,58 +352,91 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
           <div className="flex-1 relative pl-5 space-y-4">
             {/* Timeline connector line */}
-            <div className="absolute top-2.5 bottom-2.5 left-2 w-[1px] bg-gradient-to-b from-amber-400/50 via-white/5 to-transparent" />
+            {hearings.length > 0 && (
+              <div className="absolute top-2.5 bottom-2.5 left-2 w-[1px] bg-gradient-to-b from-amber-400/50 via-white/5 to-transparent" />
+            )}
 
-            {hearings.slice(0, 3).map((item) => {
-              const formattedDate = new Date(item.date).toLocaleDateString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              });
+            {hearings.length === 0 ? (
+              <div className="text-center py-8">
+                <Calendar className="w-7 h-7 text-brand-textMuted/30 mx-auto mb-2" />
+                <p className="text-[11px] text-brand-textMuted/50">
+                  No hearings scheduled.
+                </p>
+              </div>
+            ) : (
+              hearings.slice(0, 3).map((item) => {
+                const formattedDate = new Date(item.date).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+                const isPassed = isHearingCompleted(item.date);
 
-              return (
-                <div key={item.id} className="relative group select-none">
-                  {/* Timeline dot */}
-                  <div
-                    className={`absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full border border-[#0B0F19] transition-transform duration-300 group-hover:scale-125 ${
-                      item.priority === 'High'
-                        ? 'bg-red-500 shadow-[0_0_8px_#ef4444]'
-                        : item.priority === 'Medium'
-                        ? 'bg-amber-400 shadow-[0_0_8px_#f59e0b]'
-                        : 'bg-brand-blue shadow-[0_0_8px_#3b82f6]'
-                    }`}
-                  />
+                return (
+                  <div key={item.id} className="relative group select-none">
+                    {/* Timeline dot */}
+                    <div
+                      className={`absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full border border-[#0B0F19] transition-transform duration-300 group-hover:scale-125 ${
+                        isPassed
+                          ? 'bg-zinc-650 border-zinc-700/50 shadow-none'
+                          : item.priority === 'High'
+                          ? 'bg-red-500 shadow-[0_0_8px_#ef4444]'
+                          : item.priority === 'Medium'
+                          ? 'bg-amber-400 shadow-[0_0_8px_#f59e0b]'
+                          : 'bg-brand-blue shadow-[0_0_8px_#3b82f6]'
+                      }`}
+                    />
 
-                  <div className="flex flex-col">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-white group-hover:text-brand-blue transition-colors duration-200">
-                        {item.caseName}
+                    <div className={`flex flex-col transition-all duration-300 ${isPassed ? 'opacity-40 text-zinc-500' : ''}`}>
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-bold transition-colors duration-200 ${
+                          isPassed ? 'text-zinc-500 line-through decoration-zinc-500' : 'text-white group-hover:text-brand-blue'
+                        }`}>
+                          {item.caseName}
+                        </span>
+                        
+                        <div className="flex items-center gap-1.5 z-10">
+                          <span
+                            className={`text-[8px] font-bold uppercase tracking-wider ${
+                              isPassed
+                                ? 'text-zinc-500'
+                                : item.priority === 'High'
+                                ? 'text-red-400'
+                                : item.priority === 'Medium'
+                                ? 'text-amber-400'
+                                : 'text-brand-blue'
+                            }`}
+                          >
+                            {item.priority}
+                          </span>
+                          {onDeleteHearing && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteHearing(item.id);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 rounded bg-red-500/10 hover:bg-red-500 hover:text-white border border-red-500/20 text-red-400 cursor-pointer transition-all duration-300 flex items-center justify-center"
+                              title="Delete Hearing"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <span className={`text-[10px] font-mono mt-0.5 ${isPassed ? 'text-zinc-600' : 'text-amber-400/90'}`}>
+                        {formattedDate}
                       </span>
-                      <span
-                        className={`text-[8px] font-bold uppercase tracking-wider ${
-                          item.priority === 'High'
-                            ? 'text-red-400'
-                            : item.priority === 'Medium'
-                            ? 'text-amber-400'
-                            : 'text-brand-blue'
-                        }`}
-                      >
-                        {item.priority}
+
+                      <span className={`text-[9px] truncate mt-1 ${isPassed ? 'text-zinc-650' : 'text-brand-textMuted/60'}`}>
+                        {item.court}
                       </span>
                     </div>
-
-                    <span className="text-[10px] text-amber-400/90 font-mono mt-0.5">
-                      {formattedDate}
-                    </span>
-
-                    <span className="text-[9px] text-brand-textMuted/60 truncate mt-1">
-                      {item.court}
-                    </span>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </motion.div>
       </div>
@@ -483,15 +526,17 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                 </div>
 
                 <span
-                  className={`shrink-0 text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
-                    task.priority === 'High'
+                  className={`shrink-0 text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border transition-all duration-300 ${
+                    task.completed
+                      ? 'bg-zinc-800/40 border-zinc-700/50 text-zinc-500/60'
+                      : task.priority === 'High'
                       ? 'bg-red-500/10 border-red-500/20 text-red-400'
                       : task.priority === 'Medium'
                       ? 'bg-brand-purple/10 border-brand-purple/20 text-brand-purple'
                       : 'bg-brand-blue/10 border-brand-blue/20 text-brand-blue'
                   }`}
                 >
-                  {task.priority}
+                  {task.completed ? 'Done' : task.priority}
                 </span>
               </div>
             ))}

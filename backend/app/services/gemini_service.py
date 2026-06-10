@@ -1427,4 +1427,186 @@ def generate_mock_chat_agent(question: str, lawyer_side: str = None) -> Dict[str
         "agent_name": agent_name
     }
 
+async def generate_ai_activity_feed(cases: List[dict], tasks: List[dict], evidence_files: List[dict]) -> List[dict]:
+    """
+    Generates dynamic AI activity feed items based on active cases, tasks, and evidence.
+    """
+    if not cases:
+        return [
+            {
+                "id": "init-feed",
+                "title": "Awaiting Case Initialization",
+                "desc": "Evidentiary audit systems online. Initialize a workspace to start AI synthesis.",
+                "time": "Just now",
+                "type": "strategy"
+            }
+        ]
+
+    if IS_MOCK_GEMINI:
+        logger.info("Generating dynamic mock AI activity feed...")
+        return generate_mock_ai_activity_feed(cases, tasks, evidence_files)
+
+    cases_summary = [{"name": c.get("name"), "caseType": c.get("caseType"), "riskLevel": c.get("riskLevel"), "status": c.get("status"), "evidenceCount": c.get("evidenceCount")} for c in cases]
+    tasks_summary = [{"title": t.get("title"), "completed": t.get("completed"), "case_name": t.get("case_name")} for t in tasks]
+    evidence_summary = [{"file_name": ef.get("file_name"), "evidence_type": ef.get("evidence_type")} for ef in evidence_files]
+
+    prompt = f"""
+    You are the VerdictIQ AI activity log generator.
+    Based on the following active cases, tasks, and evidence files, generate a list of 3-5 real-time legal activity feed events.
+    Make the events sound like professional, live legal audit events, analyzing loopholes, identifying witness risks, assessing evidentiary strength, or highlighting timeline checkpoints.
+    Do NOT return duplicate or rigid text. The items must feel alive and completely unique to these specific cases.
+    
+    Active cases: {json.dumps(cases_summary)}
+    Active tasks: {json.dumps(tasks_summary)}
+    Uploaded evidence: {json.dumps(evidence_summary)}
+    
+    Return the result strictly as a valid JSON list of objects matching the structure:
+    [
+      {{
+        "id": "string (unique id)",
+        "title": "string (concise alert title, e.g. 'Evidentiary Gap Detected', 'Strategy Pivot recommended')",
+        "desc": "string (detailed description of the activity and what the AI analyzed)",
+        "time": "string (e.g. 'Just now', '10 mins ago', '1 hour ago')",
+        "type": "string (one of: 'critical', 'strength', 'strategy')"
+      }}
+    ]
+    """
+    try:
+        response = generate_content_with_fallback(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        return json.loads(response.text.strip())
+    except Exception as e:
+        logger.error(f"Gemini activity feed generation failed: {e}. Falling back to mock generator.")
+        return generate_mock_ai_activity_feed(cases, tasks, evidence_files)
+
+def generate_mock_ai_activity_feed(cases: List[dict], tasks: List[dict], evidence_files: List[dict]) -> List[dict]:
+    feed = []
+    for idx, c in enumerate(cases[:3]):
+        case_name = c.get("name") or "Unnamed Case"
+        risk = c.get("riskLevel", "Medium")
+        ev_count = c.get("evidenceCount", 0)
+        
+        feed.append({
+            "id": f"feed-risk-{c.get('_id') or idx}",
+            "title": f"Risk Evaluation: {case_name}",
+            "desc": f"VerdictIQ completed intake risk screening. Case marked as {risk} Risk. Primary claims indexed for defense/prosecution review.",
+            "time": "Just now" if idx == 0 else f"{idx * 20} mins ago",
+            "type": "critical" if risk == "High" else "strategy"
+        })
+        
+        if ev_count > 0:
+            feed.append({
+                "id": f"feed-ev-{c.get('_id') or idx}",
+                "title": f"Evidentiary Synthesis: {case_name}",
+                "desc": f"AI reviewed {ev_count} evidence files. Initial case strength stands at Moderate. Evidence disclosure gaps flagged for witness preparation.",
+                "time": "10 mins ago" if idx == 0 else f"{idx * 30 + 10} mins ago",
+                "type": "strength"
+            })
+            
+    pending_tasks = [t for t in tasks if not t.get("completed")]
+    if pending_tasks:
+        t = pending_tasks[0]
+        feed.append({
+            "id": f"feed-task-{t.get('_id') or 'task'}",
+            "title": "Checklist Deadline Monitoring",
+            "desc": f"Upcoming task '{t.get('title')}' for case '{t.get('case_name') or 'active workspace'}' flagged on the calendar timeline.",
+            "time": "1 hour ago",
+            "type": "strategy"
+        })
+        
+    return feed[:5]
+
+async def generate_calendar_recommendations(cases: List[dict], hearings: List[dict], evidence_files: List[dict]) -> List[dict]:
+    """
+    Generates dynamic calendar prep recommendations based on active cases, hearings, and evidence files.
+    """
+    if not cases:
+        return [
+            {
+                "type": "gap",
+                "title": "Initialize case workspace",
+                "desc": "Create a workspace and upload contract, deposition or complaint documents to generate custom AI recommendations."
+            }
+        ]
+
+    if IS_MOCK_GEMINI:
+        logger.info("Generating dynamic mock calendar recommendations...")
+        return generate_mock_calendar_recommendations(cases, hearings, evidence_files)
+
+    cases_summary = [{"name": c.get("name"), "caseType": c.get("caseType")} for c in cases]
+    hearings_summary = [{"case_name": h.get("case_name"), "court_name": h.get("court_name"), "hearing_date": h.get("hearing_date")} for h in hearings]
+    evidence_summary = [{"file_name": ef.get("file_name"), "evidence_type": ef.get("evidence_type")} for ef in evidence_files]
+
+    prompt = f"""
+    You are the VerdictIQ AI calendar schedule recommender.
+    Based on the following active cases, upcoming hearings, and uploaded evidence, generate a list of 2-3 strategic calendar prep recommendations.
+    These recommendations should help the lawyer prepare for trial, address evidence gaps, coordinate witness depositions, or prepare briefs.
+    Do NOT return duplicate or rigid text. The items must feel completely unique to these specific cases.
+    
+    Active cases: {json.dumps(cases_summary)}
+    Hearings: {json.dumps(hearings_summary)}
+    Uploaded evidence: {json.dumps(evidence_summary)}
+    
+    Return the result strictly as a valid JSON list of objects matching the structure:
+    [
+      {{
+        "type": "string (one of: 'prep', 'gap')",
+        "title": "string (short title)",
+        "desc": "string (detailed description of recommendation, e.g. 'AI suggests scheduling a mock cross-examination for CaseName 48 hours prior')",
+        "action": "string (optional button text, e.g. 'Auto-Schedule Prep')"
+      }}
+    ]
+    """
+    try:
+        response = generate_content_with_fallback(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        return json.loads(response.text.strip())
+    except Exception as e:
+        logger.error(f"Gemini calendar recommendations failed: {e}. Falling back to mock generator.")
+        return generate_mock_calendar_recommendations(cases, hearings, evidence_files)
+
+def generate_mock_calendar_recommendations(cases: List[dict], hearings: List[dict], evidence_files: List[dict]) -> List[dict]:
+    recs = []
+    
+    if hearings:
+        h = hearings[0]
+        recs.append({
+            "type": "prep",
+            "title": "Pre-Trial Prep Alert",
+            "desc": f"AI suggests scheduling a mock cross-examination for **{h.get('case_name')}** 48 hours prior to the hearing at **{h.get('court_name') or 'court'}**.",
+            "action": "Auto-Schedule Prep"
+        })
+    else:
+        c = cases[0]
+        recs.append({
+            "type": "prep",
+            "title": "Mock Strategy Simulation",
+            "desc": f"Review legal arguments and mock-test courtroom counter-risks for **{c.get('name')}**.",
+            "action": "Simulate Room"
+        })
+        
+    c = cases[0]
+    ev_count = c.get("evidenceCount", 0)
+    if ev_count == 0:
+        recs.append({
+            "type": "gap",
+            "title": "Evidentiary Intake Deficit",
+            "desc": f"No files uploaded for **{c.get('name')}**. AI recommends importing contracts or deposition records to index loopholes.",
+            "action": "Upload Files"
+        })
+    else:
+        recs.append({
+            "type": "gap",
+            "title": "Evidence Disclosure Gap",
+            "desc": f"Witness disclosure docket for **{c.get('name')}** is approaching. Complete final expert witness exchanges.",
+            "action": None
+        })
+        
+    return recs
+
+
 

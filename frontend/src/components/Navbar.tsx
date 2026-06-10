@@ -1,62 +1,25 @@
-import React, { useState } from 'react';
-import { Search, Plus, Command, Sparkles, User } from 'lucide-react';
+import React from 'react';
+import { Plus, User } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface NavbarProps {
-  onSearch: (query: string) => void;
   onCreateClick: (mode: 'case' | 'hearing' | 'task') => void;
   onProfileClick: () => void;
   userEmail: string;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
-  onSearch,
   onCreateClick,
   onProfileClick,
   userEmail,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
-
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
-    onSearch(e.target.value);
-  };
-
   return (
     <header className="h-16 flex items-center justify-between px-6 border-b border-white/5 bg-[#070A13]/40 backdrop-blur-md relative z-20 w-full">
       {/* Background Lighting */}
       <div className="absolute top-0 right-1/4 w-96 h-12 bg-brand-blue/5 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Global AI Search Bar */}
-      <div className="flex-1 max-w-md relative select-none">
-        <div className="relative flex items-center transition-all duration-300 rounded-xl bg-brand-dark/30 backdrop-blur-sm border border-white/10 hover:border-brand-blue/30 focus-within:border-brand-blue/50 focus-within:shadow-[0_0_15px_rgba(79,140,255,0.15)] group">
-          <div className="pl-4 pr-1 text-brand-textMuted/60 group-focus-within:text-brand-blue transition-colors duration-300">
-            <Search className="w-4 h-4" />
-          </div>
-          <input
-            type="text"
-            placeholder="AI Search (Cmd + K) // Find insights, loopholes, evidence..."
-            value={searchQuery}
-            onChange={handleSearchChange}
-            className="block w-full px-3 py-2 text-xs text-white bg-transparent border-none outline-none focus:ring-0 placeholder-brand-textMuted/40"
-          />
-          {/* AI Sparkle Indicator */}
-          {searchQuery && (
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="mr-2 text-brand-blue shrink-0 animate-pulse"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-            </motion.div>
-          )}
-          {/* Keycap indicators */}
-          <div className="mr-3 flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-[9px] text-brand-textMuted/40 pointer-events-none select-none font-mono">
-            <Command className="w-2.5 h-2.5" />
-            <span>K</span>
-          </div>
-        </div>
-      </div>
+      {/* Spacer to align actions to the right */}
+      <div className="flex-1" />
 
       {/* Actions */}
       <div className="flex items-center gap-4">

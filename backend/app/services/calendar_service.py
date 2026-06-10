@@ -1,7 +1,10 @@
+import logging
 from bson import ObjectId
 from datetime import datetime
 from typing import List, Optional
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 from app.database import get_collection
 from app.schemas.hearing_schema import HearingCreate, HearingUpdate
 from app.models.hearing_model import HearingInDB
@@ -46,7 +49,55 @@ async def create_case_record(case_data: dict, user_id: str, user_email: str) -> 
     case_dict["_id"] = str(case_dict["_id"])
     return serialize_mongo_doc(case_dict)
 
+async def clean_orphaned_case_data(user_id: str):
+    """
+    Identifies and removes all hearings, tasks, calendar events, evidence,
+    extractions, analyses, and reports pointing to a workspace_id/case_id
+    that no longer exists in the active 'cases' collection for this user.
+    """
+    try:
+        cases_collection = get_collection("cases")
+        cursor = cases_collection.find({"user_id": user_id}, {"_id": 1})
+        active_cases = await cursor.to_list(length=1000)
+        active_case_ids = {str(c["_id"]) for c in active_cases}
+
+        # Find all distinct workspace_ids referenced in user's calendar, tasks, or hearings
+        user_workspace_ids = set()
+        for col_name in ["hearings", "tasks", "calendar_events", "evidence"]:
+            col_cursor = get_collection(col_name).find({"user_id": user_id}, {"workspace_id": 1})
+            docs = await col_cursor.to_list(length=1000)
+            for d in docs:
+                ws_id = d.get("workspace_id")
+                if ws_id:
+                    user_workspace_ids.add(str(ws_id))
+
+        orphaned_ids = user_workspace_ids - active_case_ids
+        if orphaned_ids:
+            orphaned_list = list(orphaned_ids)
+            logger.info(f"Cleaning up {len(orphaned_list)} orphaned workspaces for user {user_id}: {orphaned_list}")
+
+            # Delete from collections that have user_id and workspace_id
+            await get_collection("hearings").delete_many({"user_id": user_id, "workspace_id": {"$in": orphaned_list}})
+            await get_collection("tasks").delete_many({"user_id": user_id, "workspace_id": {"$in": orphaned_list}})
+            await get_collection("calendar_events").delete_many({"user_id": user_id, "workspace_id": {"$in": orphaned_list}})
+            await get_collection("evidence").delete_many({"user_id": user_id, "workspace_id": {"$in": orphaned_list}})
+
+            # Delete from collections that are workspace-scoped but may not contain user_id
+            await get_collection("workspaces").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("evidence_files").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("document_extractions").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("structured_case_context").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("agent1_analysis").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("agent2_strategy").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("agent3_final_reports").delete_many({"workspace_id": {"$in": orphaned_list}})
+            await get_collection("workspace_chats").delete_many({"workspace_id": {"$in": orphaned_list}})
+    except Exception as e:
+        logger.error(f"Error cleaning up orphaned case data: {e}")
+
 async def get_all_cases(user_id: str) -> List[dict]:
+    # Run the orphaned data cleanup before returning cases to ensure consistency
+    await clean_orphaned_case_data(user_id)
+    
     cases_collection = get_collection("cases")
     cursor = cases_collection.find({"user_id": user_id}).sort("updated_at", -1)
     docs = await cursor.to_list(length=1000)
