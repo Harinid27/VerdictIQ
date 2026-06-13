@@ -122,11 +122,16 @@ async def agent0_node(state: VerdictState) -> VerdictState:
             "extracted_dates": analysis.get("extracted_dates", [])
         })
 
-    # 5. Synthesize all analyses into a case-wide structured context
+    # 5. Load previous structured context from DB (cumulative memory)
+    scc_collection = get_collection("structured_case_context")
+    prev_scc = await scc_collection.find_one({"workspace_id": workspace_id})
+
+    # Synthesize all analyses into a case-wide structured context
     try:
         structured_context = await generate_structured_case_context(
             workspace_meta=workspace_meta,
-            document_analyses=document_analyses
+            document_analyses=document_analyses,
+            previous_structured_context=prev_scc
         )
     except Exception as ex:
         logger.error(f"Error generating case-wide structured context: {ex}")
@@ -157,9 +162,19 @@ async def agent0_node(state: VerdictState) -> VerdictState:
         "key_entities": structured_context.get("key_entities", []),
         "evidence_relationships": structured_context.get("evidence_relationships", []),
         "evidence_summary": evidence_summaries,
+        "evidence_details": document_analyses,
         "legal_context": legal_context,
         "objectives": structured_context.get("objectives", []),
         "concerns": structured_context.get("concerns", []),
+        "case_overview": structured_context.get("case_overview", ""),
+        "timeline_of_events": structured_context.get("timeline_of_events", []),
+        "people_involved": structured_context.get("people_involved", []),
+        "relationships": structured_context.get("relationships", []),
+        "key_claims": structured_context.get("key_claims", []),
+        "important_facts": structured_context.get("important_facts", []),
+        "evidence_inventory": structured_context.get("evidence_inventory", []),
+        "open_questions": structured_context.get("open_questions", []),
+        "case_understanding_score": structured_context.get("case_understanding_score", 0),
         "prepared_for_agents": True
     }
 

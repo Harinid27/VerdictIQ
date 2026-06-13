@@ -66,6 +66,14 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
   const [uploadingFile, setUploadingFile] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
+  // File Upload Metadata states
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [fileToUpload, setFileToUpload] = useState<File | null>(null);
+  const [uploadDescription, setUploadDescription] = useState('');
+  const [uploadEvidenceType, setUploadEvidenceType] = useState('Contract');
+  const [uploadImportance, setUploadImportance] = useState('Important');
+  const [uploadError, setUploadError] = useState('');
+
   // Manual Note states
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [noteTitle, setNoteTitle] = useState('');
@@ -73,6 +81,15 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
   const [noteType, setNoteType] = useState('Correspondence');
   const [noteImportance, setNoteImportance] = useState('Important');
   const [addingNote, setAddingNote] = useState(false);
+
+  const isMediaFile = (file: File | null): boolean => {
+    if (!file) return false;
+    const mediaExtensions = /\.(png|jpe?g|webp|gif|mp4|mov|avi|mkv|mp3|wav|m4a)$/i;
+    return file.type.startsWith('image/') || 
+           file.type.startsWith('video/') || 
+           file.type.startsWith('audio/') || 
+           mediaExtensions.test(file.name);
+  };
 
   // Fetch all case workspace details
   const fetchWorkspaceData = async () => {
@@ -325,14 +342,36 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
     const token = localStorage.getItem('verdictiq_token');
     if (!token || files.length === 0) return;
 
-    setUploadingFile(true);
     const file = files[0];
+    setFileToUpload(file);
+    setUploadDescription('');
+    setUploadEvidenceType('Contract');
+    setUploadImportance('Important');
+    setUploadError('');
+    setIsUploadModalOpen(true);
+  };
+
+  const handleUploadSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = localStorage.getItem('verdictiq_token');
+    if (!token || !fileToUpload) return;
+
+    // Validation
+    const isMedia = isMediaFile(fileToUpload);
+    if (isMedia && !uploadDescription.trim()) {
+      setUploadError("A description is required for non-text media files (images, videos, or audio).");
+      return;
+    }
+
+    setUploadingFile(true);
+    setUploadError('');
+
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', fileToUpload);
     formData.append('workspace_id', workspaceId);
-    formData.append('evidence_type', 'Contract');
-    formData.append('description', 'Evidence file uploaded inside workspace detail view.');
-    formData.append('importance_level', 'Important');
+    formData.append('evidence_type', uploadEvidenceType);
+    formData.append('description', uploadDescription.trim() || 'Evidence file uploaded inside workspace detail view.');
+    formData.append('importance_level', uploadImportance);
 
     fetch('http://localhost:8000/api/workspace/upload-evidence', {
       method: 'POST',
@@ -345,14 +384,18 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
       .then(data => {
         setUploadingFile(false);
         if (data.success) {
+          setIsUploadModalOpen(false);
+          setFileToUpload(null);
+          setUploadDescription('');
           // Trigger the sequential AI pipeline analysis automatically
           handleRunPipeline();
         } else {
-          alert("Upload failed: " + data.message);
+          setUploadError("Upload failed: " + data.message);
         }
       })
       .catch(err => {
         setUploadingFile(false);
+        setUploadError("Upload error: " + err.message);
         console.error("Upload error:", err);
       });
   };
@@ -1315,6 +1358,168 @@ export const WorkspaceDetailPage: React.FC<WorkspaceDetailPageProps> = ({ worksp
                   >
                     {addingNote ? <Loader className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                     <span>{addingNote ? 'Creating...' : 'Add Note'}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Upload Evidence Modal */}
+      <AnimatePresence>
+        {isUploadModalOpen && fileToUpload && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                if (!uploadingFile) {
+                  setIsUploadModalOpen(false);
+                  setFileToUpload(null);
+                }
+              }}
+              className="absolute inset-0 bg-[#070A12]/80 backdrop-blur-md"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+              className="relative w-full max-w-[550px] rounded-2xl bg-brand-dark/95 border border-white/10 p-6 md:p-8 shadow-2xl overflow-hidden z-10"
+            >
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-brand-purple/50 to-brand-blue/50 opacity-80" />
+              
+              {!uploadingFile && (
+                <button
+                  onClick={() => {
+                    setIsUploadModalOpen(false);
+                    setFileToUpload(null);
+                  }}
+                  className="absolute top-4 right-4 text-brand-textMuted hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 rounded-xl bg-gradient-to-br from-brand-blue/20 to-brand-purple/20 border border-brand-blue/30 text-brand-blue">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold font-display text-white">Upload Evidence Document</h2>
+                  <p className="text-xs text-brand-textMuted mt-0.5">Specify evidence details and catalog metadata for AI parsing.</p>
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-[#161f30]/40 border border-white/5 rounded-xl mb-4 text-left">
+                <p className="text-[10px] text-brand-textMuted uppercase font-bold tracking-wider mb-1">Selected File</p>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="font-semibold text-white truncate max-w-[320px]">{fileToUpload.name}</span>
+                  <span className="text-[10px] font-mono text-brand-textMuted/70">
+                    {(fileToUpload.size / (1024 * 1024)).toFixed(2)} MB
+                  </span>
+                </div>
+              </div>
+
+              <form onSubmit={handleUploadSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">Evidence Type</label>
+                  <SmoothSelect
+                    value={uploadEvidenceType}
+                    onChange={setUploadEvidenceType}
+                    options={[
+                      { value: 'Correspondence', label: 'Correspondence / Communication' },
+                      { value: 'Contract', label: 'Contract / Agreement' },
+                      { value: 'Deposition', label: 'Deposition / Statement' },
+                      { value: 'Statute', label: 'Statute / Regulation' },
+                      { value: 'Financial', label: 'Financial / Transaction Record' },
+                      { value: 'Medical', label: 'Medical / Clinical Record' },
+                      { value: 'Photographic', label: 'Photographic / Visual Evidence' },
+                      { value: 'Video', label: 'Video Recording' },
+                      { value: 'Audio', label: 'Audio Recording' },
+                      { value: 'Other', label: 'Other Document Type' },
+                    ]}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider mb-1.5">Importance Level</label>
+                  <div className="flex gap-2">
+                    {['Low', 'Important', 'Critical'].map((lvl) => (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setUploadImportance(lvl)}
+                        className={`flex-1 py-2 rounded-xl text-xs font-semibold border transition-all duration-300 cursor-pointer ${
+                          uploadImportance === lvl
+                            ? 'bg-brand-purple/20 border-brand-purple text-white shadow-[0_0_10px_rgba(123,97,255,0.15)]'
+                            : 'bg-[#161f30] border-white/5 text-brand-textMuted hover:border-white/15'
+                        }`}
+                      >
+                        {lvl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="block text-xs font-semibold text-brand-textMuted uppercase tracking-wider">
+                      Description {isMediaFile(fileToUpload) && <span className="text-red-400 font-bold">*</span>}
+                    </label>
+                    {isMediaFile(fileToUpload) && (
+                      <span className="text-[9px] uppercase tracking-wider text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
+                        Media Description Required
+                      </span>
+                    )}
+                  </div>
+                  <textarea
+                    required={isMediaFile(fileToUpload)}
+                    rows={4}
+                    placeholder={
+                      isMediaFile(fileToUpload)
+                        ? "Since this is a non-text media file, please describe what visual/auditory information it contains so the AI agents can process it correctly..."
+                        : "Describe the content and contextual importance of this file..."
+                    }
+                    value={uploadDescription}
+                    onChange={(e) => {
+                      setUploadDescription(e.target.value);
+                      if (uploadError) setUploadError('');
+                    }}
+                    className="w-full bg-[#161f30] border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-brand-blue/60 transition-all duration-300 placeholder-white/20 resize-none text-left"
+                  />
+                </div>
+
+                {uploadError && (
+                  <div className="p-3 bg-red-950/40 border border-red-500/30 rounded-xl text-red-400 text-xs flex items-center gap-2 text-left">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{uploadError}</span>
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-4 border-t border-white/5 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsUploadModalOpen(false);
+                      setFileToUpload(null);
+                    }}
+                    disabled={uploadingFile}
+                    className="flex-1 h-11 rounded-xl text-xs font-semibold border border-white/10 hover:border-white/20 text-brand-textMuted hover:text-white bg-transparent transition-all duration-300 cursor-pointer disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={uploadingFile || (isMediaFile(fileToUpload) && !uploadDescription.trim())}
+                    className="flex-1 h-11 rounded-xl text-xs font-semibold text-white bg-gradient-to-r from-brand-blue to-brand-purple shadow-button-glow hover:translate-y-[-1px] active:translate-y-[0] transition-all duration-300 flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    {uploadingFile ? <Loader className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+                    <span>{uploadingFile ? 'Uploading...' : 'Upload Evidence'}</span>
                   </button>
                 </div>
               </form>

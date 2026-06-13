@@ -59,11 +59,20 @@ async def load_workspace_node(state: VerdictState) -> VerdictState:
     evidence_files_cursor = evidence_files_collection.find({"workspace_id": workspace_id})
     evidence_files = await evidence_files_cursor.to_list(length=100)
 
-    # Fallback to legacy 'evidence' collection if empty
-    if not evidence_files:
-        evidence_cursor = get_collection("evidence").find({"workspace_id": workspace_id})
-        legacy_evidence = await evidence_cursor.to_list(length=100)
-        for le in legacy_evidence:
+    # Merge evidence_files and evidence collections to ensure extracted_text and other fields are joined
+    evidence_map = {}
+    for ef in evidence_files:
+        evidence_map[str(ef["_id"])] = ef
+
+    evidence_cursor = get_collection("evidence").find({"workspace_id": workspace_id})
+    legacy_evidence = await evidence_cursor.to_list(length=100)
+    for le in legacy_evidence:
+        eid = str(le["_id"])
+        if eid in evidence_map:
+            # Merge fields, making sure we preserve 'extracted_text' and other fields
+            evidence_map[eid] = {**evidence_map[eid], **le}
+        else:
+            # If not in evidence_files yet, migrate it
             ef_doc = {
                 "workspace_id": workspace_id,
                 "file_url": le.get("file_url"),
@@ -72,12 +81,14 @@ async def load_workspace_node(state: VerdictState) -> VerdictState:
                 "description": le.get("description", ""),
                 "related_claim": le.get("related_claim", ""),
                 "importance_level": le.get("importance_level", "Important"),
-                "uploaded_at": le.get("uploaded_at", datetime.utcnow())
+                "uploaded_at": le.get("uploaded_at", datetime.utcnow()),
+                "extracted_text": le.get("extracted_text", "")
             }
-            # Preserve matching ID
             ef_doc["_id"] = le["_id"]
             await evidence_files_collection.insert_one(ef_doc)
-            evidence_files.append(ef_doc)
+            evidence_map[eid] = ef_doc
+
+    evidence_files = list(evidence_map.values())
 
     # Serialize files to be JSON safe inside state
     serialized_files = []

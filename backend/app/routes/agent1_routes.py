@@ -6,7 +6,7 @@ import logging
 
 from app.middleware.auth_middleware import get_current_user
 from app.database import get_collection
-from app.services.gemini_service import generate_final_legal_report
+from app.services.gemini_service import analyze_case_evidence_and_risks
 from app.services.rag_service import RAGService
 from app.nodes.save_results import save_results_node
 
@@ -49,44 +49,29 @@ async def analyze_workspace_evidence(workspace_id: str, current_user: dict = Dep
         logger.error(f"RAG context retrieval failed in Agent 1 route: {e}")
         rag_context = ""
 
-    # Call Gemini service to perform unified Agent 3 legal intelligence
+    # Call Gemini service to perform Agent 1 evidence auditing and risk analysis
     try:
-        merged_meta = dict(context_doc)
-        if workspace_meta:
-            merged_meta["legal_context"] = {
-                "case_title": workspace_meta.get("case_title"),
-                "case_type": workspace_meta.get("case_type"),
-                "lawyer_side": lawyer_side or "Plaintiff",
-                "client_name": workspace_meta.get("client_name"),
-                "opposing_party": workspace_meta.get("opposing_party")
-            }
-        else:
-            merged_meta["legal_context"] = {
-                "case_title": "Unnamed Case",
-                "case_type": "General Dispute",
-                "lawyer_side": lawyer_side or "Plaintiff",
-                "client_name": "Client",
-                "opposing_party": "Opponent"
-            }
-
-        analysis_result = await generate_final_legal_report(merged_meta, rag_context)
+        analysis_result = await analyze_case_evidence_and_risks(
+            structured_context=context_doc,
+            lawyer_side=lawyer_side
+        )
     except Exception as e:
-        logger.error(f"Failed to perform unified Agent 3 analysis: {e}")
+        logger.error(f"Failed to perform Agent 1 analysis: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Agent 3 reasoning engine failed: {e}"
+            detail=f"Agent 1 reasoning engine failed: {e}"
         )
 
-    # 3. Use save_results_node to map and save everything across collections
+    # 3. Use save_results_node to map and save Agent 1 results
     try:
         state = {
             "workspace_id": workspace_id,
             "agent0_output": context_doc,
-            "agent3_output": analysis_result
+            "agent1_output": analysis_result
         }
         await save_results_node(state)
     except Exception as e:
-        logger.error(f"Failed to save unified analysis results: {e}")
+        logger.error(f"Failed to save Agent 1 analysis results: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to persist analysis results: {e}"
@@ -111,6 +96,10 @@ async def analyze_workspace_evidence(workspace_id: str, current_user: dict = Dep
         "risk_level": agent1_doc.get("risk_level", "Medium Risk"),
         "confidence_scores": agent1_doc.get("confidence_scores", []),
         "evidence_relationships": agent1_doc.get("evidence_relationships", []),
+        "evidence_evaluations": agent1_doc.get("evidence_evaluations", []),
+        "investigative_gaps": agent1_doc.get("investigative_gaps", []),
+        "reliability_concerns": agent1_doc.get("reliability_concerns", []),
+        "alternative_interpretations": agent1_doc.get("alternative_interpretations", []),
         "prepared_for_agent2": True,
         "prepared_for_agent3": True
     }
@@ -147,6 +136,10 @@ async def get_agent1_results(workspace_id: str, current_user: dict = Depends(get
         "risk_level": doc.get("risk_level") or doc.get("risk_analysis", {}).get("risk_level", "Medium Risk"),
         "confidence_scores": doc.get("confidence_scores", []),
         "evidence_relationships": doc.get("evidence_relationships", []),
+        "evidence_evaluations": doc.get("evidence_evaluations", []),
+        "investigative_gaps": doc.get("investigative_gaps", []),
+        "reliability_concerns": doc.get("reliability_concerns", []),
+        "alternative_interpretations": doc.get("alternative_interpretations", []),
         "prepared_for_agent2": True,
         "prepared_for_agent3": True
     }

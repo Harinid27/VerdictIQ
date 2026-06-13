@@ -70,6 +70,11 @@ class RAGService:
             logger.info("RAG: Using dummy embeddings (mock engine active).")
             return [[0.0] * 768 for _ in texts]
 
+        # Configure pipeline API key dynamically for embeddings
+        pipeline_key = os.getenv("PIPELINE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if pipeline_key:
+            genai.configure(api_key=pipeline_key)
+
         try:
             # Clean empty elements
             cleaned_texts = [t if t.strip() else "[empty]" for t in texts]
@@ -95,6 +100,12 @@ class RAGService:
         """
         if IS_MOCK_GEMINI or not query:
             return [0.0] * 768
+
+        # Configure pipeline API key dynamically for embeddings
+        pipeline_key = os.getenv("PIPELINE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if pipeline_key:
+            genai.configure(api_key=pipeline_key)
+
         try:
             result = genai.embed_content(
                 model="models/text-embedding-004",

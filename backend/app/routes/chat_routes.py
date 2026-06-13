@@ -77,7 +77,15 @@ async def ask_workspace_agent(
         scc_collection = get_collection("structured_case_context")
         context_doc = await scc_collection.find_one({"workspace_id": workspace_id})
         
-        # C. Synthesis Report (Agent 3)
+        # C. Evidence audit (Agent 1)
+        agent1_collection = get_collection("agent1_analysis")
+        agent1_doc = await agent1_collection.find_one({"workspace_id": workspace_id})
+
+        # D. Strategy (Agent 2)
+        agent2_collection = get_collection("agent2_strategy")
+        agent2_doc = await agent2_collection.find_one({"workspace_id": workspace_id})
+
+        # E. Synthesis Report (Agent 3)
         agent3_collection = get_collection("agent3_final_reports")
         a3_doc = await agent3_collection.find_one({"workspace_id": workspace_id})
 
@@ -87,6 +95,11 @@ async def ask_workspace_agent(
                 status_code=400,
                 detail="Chat is locked. Please run the AI Agent pipeline to generate the case report first."
             )
+
+        # F. Uploaded evidence files from evidence collection
+        evidence_collection = get_collection("evidence")
+        evidence_cursor = evidence_collection.find({"workspace_id": workspace_id})
+        evidence_files = await evidence_cursor.to_list(length=100)
 
         # 2. Retrieve document context via RAG
         logger.info(f"Chat Endpoint: Querying RAG context for question: '{question[:50]}'")
@@ -112,11 +125,12 @@ async def ask_workspace_agent(
         logger.info(f"Chat Endpoint: Executing Gemini call for workspace: {workspace_id}")
         
         agent4_res = await run_chat_agent(
-            case_summary=context_doc.get("case_summary", "") if context_doc else "",
-            claims=context_doc.get("claims", []) if context_doc else [],
-            evidence_audit={},  # Removed Agent 1
-            courtroom_strategy={},  # Removed Agent 2
-            final_report=a3_doc or {},
+            case_metadata=workspace or {},
+            evidence_files=evidence_files or [],
+            agent0_output=context_doc or {},
+            agent1_output=agent1_doc or {},
+            agent2_output=agent2_doc or {},
+            agent3_output=a3_doc or {},
             rag_context=rag_context,
             chat_history=history_str,
             question=question,
@@ -251,6 +265,11 @@ async def test_chat_diagnostic(
         a1_doc = await get_collection("agent1_analysis").find_one({"workspace_id": workspace_id})
         a2_doc = await get_collection("agent2_strategy").find_one({"workspace_id": workspace_id})
         a3_doc = await get_collection("agent3_final_reports").find_one({"workspace_id": workspace_id})
+
+        # Fetch evidence files
+        evidence_collection = get_collection("evidence")
+        evidence_cursor = evidence_collection.find({"workspace_id": workspace_id})
+        evidence_files = await evidence_cursor.to_list(length=100)
         
         # Format chat history
         chats_collection = get_collection("workspace_chats")
@@ -267,15 +286,37 @@ async def test_chat_diagnostic(
         # 3. Construct prompt
         from app.services.gemini_service import LEGAL_CHAT_PROMPT, get_lawyer_side_prefix
         prefix = get_lawyer_side_prefix(workspace.get("lawyer_side"))
+        
+        clean_a3 = {
+            "executive_summary": a3_doc.get("executive_summary", ""),
+            "case_strength": a3_doc.get("case_strength", ""),
+            "case_strength_score": a3_doc.get("case_strength_score", 50),
+            "strongest_evidence": a3_doc.get("strongest_evidence", []),
+            "weak_evidence": a3_doc.get("weak_evidence", []),
+            "missing_evidence": a3_doc.get("missing_evidence", []),
+            "loopholes": a3_doc.get("loopholes", []),
+            "legal_references": a3_doc.get("legal_references", []),
+            "courtroom_risks": a3_doc.get("courtroom_risks", []),
+            "final_case_assessment": a3_doc.get("final_case_assessment", ""),
+            "recommendations": a3_doc.get("strategic_recommendations", []),
+            "case_strength_assessment": a3_doc.get("case_strength_assessment", {}),
+            "final_legal_intelligence_report": a3_doc.get("final_legal_intelligence_report", "")
+        } if a3_doc else {}
+
+        clean_a1 = {k: v for k, v in a1_doc.items() if k not in ["_id", "generated_at", "workspace_id"]} if a1_doc else {}
+        clean_a2 = {k: v for k, v in a2_doc.items() if k not in ["_id", "generated_at", "workspace_id"]} if a2_doc else {}
+        clean_a0 = {k: v for k, v in context_doc.items() if k not in ["_id", "generated_at", "workspace_id"]} if context_doc else {}
+
         prompt = LEGAL_CHAT_PROMPT.format(
             lawyer_side_prefix=prefix,
-            case_summary=context_doc.get("case_summary", "") if context_doc else "",
-            claims=json.dumps(context_doc.get("claims", []) if context_doc else []),
-            evidence_audit=json.dumps(a1_doc or {}),
-            courtroom_strategy=json.dumps(a2_doc or {}),
-            final_report=json.dumps(a3_doc or {}),
+            case_metadata=json.dumps(workspace, cls=MongoJSONEncoder, indent=2) if workspace else "{}",
+            evidence_files=json.dumps(evidence_files, cls=MongoJSONEncoder, indent=2) if evidence_files else "[]",
+            agent0_output=json.dumps(clean_a0, cls=MongoJSONEncoder, indent=2),
+            agent1_output=json.dumps(clean_a1, cls=MongoJSONEncoder, indent=2),
+            agent2_strategy=json.dumps(clean_a2, cls=MongoJSONEncoder, indent=2),
+            agent3_output=json.dumps(clean_a3, cls=MongoJSONEncoder, indent=2),
             rag_context=retrieved_context or "No context retrieved.",
-            chat_history=history_str or "No history.",
+            chat_history=history_str or "No previous history.",
             question=question
         )
         
@@ -288,11 +329,13 @@ async def test_chat_diagnostic(
         from app.services.gemini_service import IS_MOCK_GEMINI, validate_and_parse_json, Agent4Output, GEMINI_MODEL, generate_content_with_fallback
         if IS_MOCK_GEMINI:
             gemini_response = '{"answer": "Mock diagnostic reply", "supporting_context": [], "confidence": "High"}'
-            parsing_result = json.loads(gemini_response)
+            parsing_result = json.loads(gemini_response, strict=False)
         else:
+            chat_key = os.getenv("CHAT_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
             response = generate_content_with_fallback(
                 prompt,
-                generation_config={"response_mime_type": "application/json"}
+                generation_config={"response_mime_type": "application/json"},
+                api_key=chat_key
             )
             gemini_response = response.text.strip()
             parsing_result = validate_and_parse_json(gemini_response, Agent4Output)

@@ -93,20 +93,21 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
     evidence_collection_docs = get_collection("evidence")
 
     # Merge evidence_files and evidence docs (avoid duplicates by _id)
-    seen_ids = set()
-    all_evidence = []
+    # If a document exists in both, merge their fields so we preserve 'extracted_text'
+    evidence_map = {}
     for ef in evidence_files:
-        seen_ids.add(str(ef["_id"]))
-        all_evidence.append(ef)
+        evidence_map[str(ef["_id"])] = ef
 
-    # Also pull from the 'evidence' collection (where /api/files/upload saves)
     ev_cursor = evidence_collection_docs.find({"workspace_id": workspace_id})
     ev_docs = await ev_cursor.to_list(length=100)
     for ev in ev_docs:
         eid = str(ev["_id"])
-        if eid not in seen_ids:
-            seen_ids.add(eid)
-            all_evidence.append(ev)
+        if eid in evidence_map:
+            evidence_map[eid] = {**evidence_map[eid], **ev}
+        else:
+            evidence_map[eid] = ev
+
+    all_evidence = list(evidence_map.values())
 
     logger.info(f"Agent 0: Processing {len(all_evidence)} total evidence files for workspace {workspace_id}")
 
@@ -199,10 +200,14 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
         "concerns": workspace.get("concerns")
     }
 
+    scc_collection = get_collection("structured_case_context")
+    prev_scc = await scc_collection.find_one({"workspace_id": workspace_id})
+
     try:
         structured_context = await generate_structured_case_context(
             workspace_meta=workspace_meta, 
-            document_analyses=document_analyses
+            document_analyses=document_analyses,
+            previous_structured_context=prev_scc
         )
     except Exception as ex:
         logger.error(f"Error generating case-wide structured context: {ex}")
@@ -211,27 +216,7 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
             detail=f"Failed to generate structured context from Gemini: {ex}"
         )
 
-    # 5. Save structured context in structured_case_context collection
-    scc_doc = {
-        "workspace_id": workspace_id,
-        "case_summary": structured_context.get("case_summary", ""),
-        "claims": structured_context.get("claims", []),
-        "timeline": structured_context.get("timeline", []),
-        "key_entities": structured_context.get("key_entities", []),
-        "evidence_relationships": structured_context.get("evidence_relationships", []),
-        "objectives": structured_context.get("objectives", []),
-        "concerns": structured_context.get("concerns", []),
-        "generated_at": datetime.utcnow()
-    }
-    
-    scc_collection = get_collection("structured_case_context")
-    await scc_collection.update_one(
-        {"workspace_id": workspace_id},
-        {"$set": scc_doc},
-        upsert=True
-    )
-
-    # 6. Format evidence summary for final JSON
+    # 5. Format evidence summary for final JSON
     evidence_summaries = []
     for da in document_analyses:
         evidence_summaries.append({
@@ -239,6 +224,36 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
             "ai_summary": da.get("ai_summary"),
             "importance_level": da.get("importance_level")
         })
+
+    # 6. Save structured context in structured_case_context collection
+    scc_doc = {
+        "workspace_id": workspace_id,
+        "case_summary": structured_context.get("case_summary", ""),
+        "claims": structured_context.get("claims", []),
+        "timeline": structured_context.get("timeline", []),
+        "key_entities": structured_context.get("key_entities", []),
+        "evidence_relationships": structured_context.get("evidence_relationships", []),
+        "evidence_summary": evidence_summaries,
+        "evidence_details": document_analyses,
+        "objectives": structured_context.get("objectives", []),
+        "concerns": structured_context.get("concerns", []),
+        "case_overview": structured_context.get("case_overview", ""),
+        "timeline_of_events": structured_context.get("timeline_of_events", []),
+        "people_involved": structured_context.get("people_involved", []),
+        "relationships": structured_context.get("relationships", []),
+        "key_claims": structured_context.get("key_claims", []),
+        "important_facts": structured_context.get("important_facts", []),
+        "evidence_inventory": structured_context.get("evidence_inventory", []),
+        "open_questions": structured_context.get("open_questions", []),
+        "case_understanding_score": structured_context.get("case_understanding_score", 0),
+        "generated_at": datetime.utcnow()
+    }
+    
+    await scc_collection.update_one(
+        {"workspace_id": workspace_id},
+        {"$set": scc_doc},
+        upsert=True
+    )
 
     legal_context = {
         "case_title": workspace.get("case_title"),
@@ -258,6 +273,15 @@ async def process_workspace(workspace_id: str, current_user: dict = Depends(get_
         "legal_context": legal_context,
         "objectives": scc_doc.get("objectives"),
         "concerns": scc_doc.get("concerns"),
+        "case_overview": scc_doc.get("case_overview"),
+        "timeline_of_events": scc_doc.get("timeline_of_events"),
+        "people_involved": scc_doc.get("people_involved"),
+        "relationships": scc_doc.get("relationships"),
+        "key_claims": scc_doc.get("key_claims"),
+        "important_facts": scc_doc.get("important_facts"),
+        "evidence_inventory": scc_doc.get("evidence_inventory"),
+        "open_questions": scc_doc.get("open_questions"),
+        "case_understanding_score": scc_doc.get("case_understanding_score"),
         "prepared_for_agents": True
     }
 

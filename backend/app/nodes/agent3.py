@@ -9,14 +9,18 @@ logger = logging.getLogger(__name__)
 async def agent3_node(state: VerdictState) -> VerdictState:
     """
     LangGraph node: agent3_node
-    Role: FULL LEGAL INTELLIGENCE ENGINE (merged system)
+    Role: Legal Intelligence & Final Report Agent
     Responsibilities:
-      - Sequentially runs evidence analysis, legal strategy generation, legal mapping, and report generation.
-      - Consolidates structured context (Agent 0) and statutory RAG context.
-      - Generates the complete multi-section legal intelligence report in the new Agent 3 JSON schema.
+      - Consumes Agent 0, Agent 1, and Agent 2 outputs.
+      - Maps facts to legal sections and handles procedural mapping (Step 1).
+      - Performs case strength SWOT analysis (Step 2).
+      - Generates detailed Executive Summary (Step 3).
+      - Produces the comprehensive Final Legal Intelligence Report (Step 4).
     """
     workspace_id = state.get("workspace_id")
     agent0_output = state.get("agent0_output")
+    agent1_output = state.get("agent1_output")
+    agent2_output = state.get("agent2_output")
     case_context = state.get("case_context") or {}
     rag_context = case_context.get("rag_context", "")
 
@@ -24,11 +28,17 @@ async def agent3_node(state: VerdictState) -> VerdictState:
 
     if not agent0_output:
         raise ValueError("Agent 0 structured context is missing in state.")
+    if not agent1_output:
+        raise ValueError("Agent 1 auditing output is missing in state.")
+    if not agent2_output:
+        raise ValueError("Agent 2 strategic output is missing in state.")
 
     # Call Gemini synthesis service to generate report
     try:
         report_result = await generate_final_legal_report(
             workspace_meta=agent0_output, 
+            agent1_analysis=agent1_output,
+            agent2_strategy=agent2_output,
             rag_context=rag_context
         )
     except Exception as e:

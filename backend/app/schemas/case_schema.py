@@ -33,6 +33,15 @@ class Agent0Output(BaseModel):
     evidence_relationships: List[EvidenceRelationship] = Field(..., description="Mapping of evidence documents to claims")
     objectives: List[str] = Field(..., description="Strategic litigation objectives for our client")
     concerns: List[str] = Field(..., description="Initial areas of concern or exposure for our client")
+    case_overview: Optional[str] = Field(default="", description="Case Overview: Detailed legal analyst's case briefing summary narrative.")
+    timeline_of_events: Optional[List[TimelineEvent]] = Field(default=[], description="Timeline of Events: Chronological timeline of verified events.")
+    people_involved: Optional[List[KeyEntity]] = Field(default=[], description="People Involved: Key people/entities and their roles in the case.")
+    relationships: Optional[List[str]] = Field(default=[], description="Relationships: Descriptions of key relationships between entities/events.")
+    key_claims: Optional[List[str]] = Field(default=[], description="Key Claims: Primary legal claims or defenses identified.")
+    important_facts: Optional[List[str]] = Field(default=[], description="Important Facts: Detailed key facts established by evidence.")
+    evidence_inventory: Optional[List[str]] = Field(default=[], description="Evidence Inventory: Descriptions of evidence, NOT raw filenames.")
+    open_questions: Optional[List[str]] = Field(default=[], description="Open Questions: Gaps or unresolved questions to investigate.")
+    case_understanding_score: Optional[int] = Field(default=0, description="Confidence score (0-100) of the extracted facts.")
 
 
 # --- AGENT 1 SCHEMAS ---
@@ -75,6 +84,16 @@ class ClaimConfidenceScore(BaseModel):
     claim: str = Field(..., description="The legal claim text")
     confidence_score: int = Field(..., description="Confidence score from 0 to 100 based on supporting evidence strength")
 
+class EvidenceEvaluationItem(BaseModel):
+    evidence_id: str = Field(..., description="Evidence ID or filename")
+    file_name: str = Field(..., description="Name of the file")
+    classification: str = Field(..., description="Strong, Moderate, or Weak")
+    why_strong: str = Field(..., description="Why the evidence is strong (or N/A)")
+    why_weak: str = Field(..., description="Why the evidence is weak (or N/A)")
+    assumptions: str = Field(..., description="What assumptions exist regarding this evidence")
+    reliability_level: str = Field(..., description="Reliability level (e.g., High, Medium, Low)")
+    possible_challenges: str = Field(..., description="Possible challenges or objections by opposing counsel")
+
 class Agent1Output(BaseModel):
     strong_evidence: List[DetailedEvidenceItem] = Field(..., description="Evidence that directly proves key claims")
     moderate_evidence: List[DetailedEvidenceItem] = Field(..., description="Circumstantial or partially unverified evidence")
@@ -87,6 +106,10 @@ class Agent1Output(BaseModel):
     risk_level: str = Field(..., description="Overall risk level, e.g., 'Medium Risk'")
     confidence_scores: List[ClaimConfidenceScore] = Field(..., description="Evidence-grounded score per claim")
     evidence_relationships: List[EvidenceRelationship] = Field(..., description="Verified mappings of evidence documents to claims")
+    evidence_evaluations: Optional[List[EvidenceEvaluationItem]] = Field(default=[], description="Evaluation details for each evidence item")
+    investigative_gaps: Optional[List[str]] = Field(default=[], description="Investigative gaps identified in the case")
+    reliability_concerns: Optional[List[str]] = Field(default=[], description="Reliability concerns for evidence or witnesses")
+    alternative_interpretations: Optional[List[str]] = Field(default=[], description="Possible alternative interpretations of facts/evidence")
 
 
 # --- LEGAL RESEARCH SCHEMAS ---
@@ -137,6 +160,13 @@ class EvidenceUtilization(BaseModel):
     sequence_order: int = Field(..., description="Chronological sequence order for courtroom presentation")
     presentation_guidance: str = Field(..., description="Advice on how counsel should present this specific exhibit")
 
+class AdversarialSimulation(BaseModel):
+    evidence_id: str = Field(..., description="Evidence ID or filename referenced")
+    evidence_name: str = Field(..., description="Evidence document name")
+    argument: str = Field(..., description="Section A: Lawyer Argument (strongest argument for our side referencing this evidence)")
+    counterargument: str = Field(..., description="Section B: Defense Counterargument (strongest opposing argument attacking this evidence's weaknesses)")
+    rebuttal: str = Field(..., description="Section C: Rebuttal (our response to the counterargument)")
+
 class Agent2Output(BaseModel):
     lawyer_side: str = Field(..., description="Represented side, e.g. 'Defense'")
     lawyer_arguments: List[LawyerArgument] = Field(..., description="Core arguments backing client side")
@@ -146,6 +176,7 @@ class Agent2Output(BaseModel):
     strategic_recommendations: List[str] = Field(..., description="Strategic recommendations for litigation direction")
     argument_priorities: ArgumentPriorities = Field(..., description="Categorization of argument confidence levels")
     evidence_utilization_strategy: List[EvidenceUtilization] = Field(..., description="Ordered plan of exhibit presentation")
+    adversarial_simulations: Optional[List[AdversarialSimulation]] = Field(default=[], description="Section A, B, and C courtroom exchange simulation for all major evidence items")
 
 
 # --- AGENT 3 SCHEMAS ---
@@ -182,11 +213,19 @@ class LegalSectionMap(BaseModel):
     simple_explanation: str = Field(..., description="Simple explanation of applicability in simple language")
     burden_of_proof: str = Field(..., description="Burden of proof requirements")
     compliance_gap: str = Field(..., description="Legal thresholds and compliance gaps")
+    procedural_considerations: Optional[str] = Field(default="N/A", description="Procedural considerations for this section")
+    why_applies: Optional[str] = Field(default="N/A", description="Detailed explanation of why this law/section applies")
 
 class CaseRiskDetail(BaseModel):
     title: str = Field(..., description="Vulnerability title")
     description: str = Field(..., description="Explanation of risk")
     severity: str = Field(..., description="Severity level: Critical, High, Medium, Low")
+
+class SWOTAssessment(BaseModel):
+    strengths: List[str] = Field(..., description="SWOT: Strengths of the case")
+    weaknesses: List[str] = Field(..., description="SWOT: Weaknesses of the case")
+    opportunities: List[str] = Field(..., description="SWOT: Opportunities for strategy")
+    risks: List[str] = Field(..., description="SWOT: Risks and threats")
 
 class Agent3Output(BaseModel):
     evidence_analysis: FinalEvidenceAnalysis = Field(..., description="Analysis of the case evidence and reliability")
@@ -196,6 +235,9 @@ class Agent3Output(BaseModel):
     final_assessment: str = Field(..., description="Executive summary and overall case assessment")
     recommendations: List[str] = Field(..., description="Strategic litigation recommendations")
     final_score: str = Field(..., description="Final case assessment score (0-100 or favorability rating, e.g. '85%')")
+    executive_summary: Optional[str] = Field(default="", description="STEP 3: Detailed Executive Summary of the case")
+    case_strength_assessment: Optional[SWOTAssessment] = Field(default=None, description="STEP 2: SWOT Case Strength Assessment")
+    final_legal_intelligence_report: Optional[str] = Field(default="", description="STEP 4: Comprehensive, detailed Final Legal Intelligence Report referencing evidence")
 
 
 class Agent4Output(BaseModel):
